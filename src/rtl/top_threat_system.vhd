@@ -49,7 +49,11 @@ entity top_threat_system is
         hdmi_tx_clk_n  : out   std_logic;
         hdmi_tx_d_p    : out   std_logic_vector(2 downto 0);
         hdmi_tx_d_n    : out   std_logic_vector(2 downto 0);
-        hdmi_tx_hpd    : out   std_logic
+        hdmi_tx_hpd    : out   std_logic;
+
+        -- TPD12S016 HDMI level-shifter enable (Zybo Rev B only).  Must be
+        -- driven high or the on-board HDMI TX buffer stays disabled.
+        hdmi_tx_en     : out   std_logic
     );
 end entity;
 
@@ -299,5 +303,7 @@ begin
             hdmi_tx_d_p   => hdmi_tx_d_p,
             hdmi_tx_d_n   => hdmi_tx_d_n,
             hdmi_tx_hpd   => hdmi_tx_hpd );
+
+    hdmi_tx_en <= '1';
 
 end architecture;
