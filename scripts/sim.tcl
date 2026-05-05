@@ -1,0 +1,72 @@
+# =============================================================================
+# sim.tcl - run every testbench under src/sim using xvhdl/xelab/xsim.
+#
+# Usage (from repo root):
+#   vivado -mode batch -source scripts/sim.tcl
+# =============================================================================
+
+file mkdir build/sim
+cd build/sim
+
+set rtl_files {
+    ../../src/rtl/oled/oled_init_rom.vhd
+    ../../src/rtl/oled/font_5x8_rom.vhd
+
+    ../../src/rtl/common/synchronizer.vhd
+    ../../src/rtl/common/debouncer.vhd
+    ../../src/rtl/common/pulse_gen.vhd
+    ../../src/rtl/common/moving_average8.vhd
+
+    ../../src/rtl/sensors/pmod_als_spi.vhd
+    ../../src/rtl/sensors/pmod_maxsonar_pw.vhd
+    ../../src/rtl/sensors/threshold_detect.vhd
+
+    ../../src/rtl/fsm/threat_fsm.vhd
+
+    ../../src/rtl/oled/oled_spi_master.vhd
+    ../../src/rtl/oled/oled_framebuffer.vhd
+    ../../src/rtl/oled/pmod_oled_top.vhd
+
+    ../../src/rtl/hdmi/clk_wiz_hdmi.vhd
+    ../../src/rtl/hdmi/vga_timing_640x480.vhd
+    ../../src/rtl/hdmi/radar_renderer.vhd
+    ../../src/rtl/hdmi/tmds_encoder.vhd
+    ../../src/rtl/hdmi/tmds_serializer.vhd
+    ../../src/rtl/hdmi/hdmi_top.vhd
+
+    ../../src/rtl/top_threat_system.vhd
+}
+
+set tb_files {
+    ../../src/sim/tb_synchronizer.vhd
+    ../../src/sim/tb_debouncer.vhd
+    ../../src/sim/tb_pulse_gen.vhd
+    ../../src/sim/tb_moving_average8.vhd
+    ../../src/sim/tb_threshold_detect.vhd
+    ../../src/sim/tb_pmod_als_spi.vhd
+    ../../src/sim/tb_pmod_maxsonar_pw.vhd
+    ../../src/sim/tb_threat_fsm.vhd
+    ../../src/sim/tb_oled_init.vhd
+    ../../src/sim/tb_radar_renderer.vhd
+}
+
+# Compile every RTL + TB source.
+foreach f [concat $rtl_files $tb_files] {
+    puts "xvhdl -2008 $f"
+    if { [catch { exec xvhdl -2008 $f } msg] } { puts $msg; exit 1 }
+}
+
+# Elaborate + run each testbench (entity name = file stem).
+foreach tb $tb_files {
+    set name [file rootname [file tail $tb]]
+    puts "==== $name ===="
+    if { [catch { exec xelab -debug typical -L unisim -L unisims_ver $name -s ${name}_sim } msg] } {
+        puts $msg; exit 1
+    }
+    if { [catch { exec xsim ${name}_sim -runall } msg] } {
+        puts $msg; exit 1
+    }
+}
+
+puts "INFO: all testbenches finished"
+exit 0
