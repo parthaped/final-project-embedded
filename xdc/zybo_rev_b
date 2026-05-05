@@ -28,30 +28,38 @@ set_property -dict { PACKAGE_PIN D18  IOSTANDARD LVCMOS33 } [get_ports { led[3] 
 # Pmod JB (Pmod OLED, SSD1306, 12-pin)
 #   Top row    : JB1=CS    JB2=MOSI  JB3=(unused)  JB4=SCK
 #   Bottom row : JB7=DC    JB8=RES   JB9=VBATC     JB10=VDDC
-#   (JB1_P=T20 / JB1_N=U20 ... JB4_P=W18 / JB4_N=W19 -- per Rev B XDC)
+#
+#   Per the Zybo Rev B physical Pmod-pin -> FPGA-pin map:
+#     JB1=T20 JB2=U20 JB3=V20 JB4=W20  (top row)
+#     JB7=Y18 JB8=Y19 JB9=W18 JB10=W19 (bottom row)
 # -----------------------------------------------------------------------------
 set_property -dict { PACKAGE_PIN T20  IOSTANDARD LVCMOS33 } [get_ports { oled_cs_n   }]; ;# JB1
-set_property -dict { PACKAGE_PIN V20  IOSTANDARD LVCMOS33 } [get_ports { oled_mosi   }]; ;# JB2
-set_property -dict { PACKAGE_PIN W18  IOSTANDARD LVCMOS33 } [get_ports { oled_sclk   }]; ;# JB4
-set_property -dict { PACKAGE_PIN U20  IOSTANDARD LVCMOS33 } [get_ports { oled_dc     }]; ;# JB7
-set_property -dict { PACKAGE_PIN W20  IOSTANDARD LVCMOS33 } [get_ports { oled_res_n  }]; ;# JB8
-set_property -dict { PACKAGE_PIN Y19  IOSTANDARD LVCMOS33 } [get_ports { oled_vbat_n }]; ;# JB9
+set_property -dict { PACKAGE_PIN U20  IOSTANDARD LVCMOS33 } [get_ports { oled_mosi   }]; ;# JB2
+set_property -dict { PACKAGE_PIN W20  IOSTANDARD LVCMOS33 } [get_ports { oled_sclk   }]; ;# JB4
+set_property -dict { PACKAGE_PIN Y18  IOSTANDARD LVCMOS33 } [get_ports { oled_dc     }]; ;# JB7
+set_property -dict { PACKAGE_PIN Y19  IOSTANDARD LVCMOS33 } [get_ports { oled_res_n  }]; ;# JB8
+set_property -dict { PACKAGE_PIN W18  IOSTANDARD LVCMOS33 } [get_ports { oled_vbat_n }]; ;# JB9
 set_property -dict { PACKAGE_PIN W19  IOSTANDARD LVCMOS33 } [get_ports { oled_vdd_n  }]; ;# JB10
 
 # -----------------------------------------------------------------------------
 # Pmod JC top row (Pmod ALS, ADC081S021, 6-pin SPI)
 #   JC1=CS  JC3=MISO  JC4=SCK
-#   (JC1_P=V15, JC3_P=W14, JC4_P=T12 -- per Rev B XDC)
+#
+#   Per the Zybo Rev B physical Pmod-pin -> FPGA-pin map:
+#     JC1=V15 JC2=W15 JC3=T11 JC4=T10
 # -----------------------------------------------------------------------------
 set_property -dict { PACKAGE_PIN V15  IOSTANDARD LVCMOS33 } [get_ports { als_cs_n }];    ;# JC1
-set_property -dict { PACKAGE_PIN W14  IOSTANDARD LVCMOS33 } [get_ports { als_miso }];    ;# JC3
-set_property -dict { PACKAGE_PIN T12  IOSTANDARD LVCMOS33 } [get_ports { als_sclk }];    ;# JC4
+set_property -dict { PACKAGE_PIN T11  IOSTANDARD LVCMOS33 } [get_ports { als_miso }];    ;# JC3
+set_property -dict { PACKAGE_PIN T10  IOSTANDARD LVCMOS33 } [get_ports { als_sclk }];    ;# JC4
 
 # -----------------------------------------------------------------------------
 # Pmod JC bottom row (Pmod MAXSONAR, PW mode)
-#   JC9 = PW input  (JC3_N=Y14 on Rev B = bottom-row pin 9)
+#   JC9 = PW input
+#
+#   Per the Zybo Rev B physical Pmod-pin -> FPGA-pin map:
+#     JC7=W14 JC8=Y14 JC9=T12 JC10=U12
 # -----------------------------------------------------------------------------
-set_property -dict { PACKAGE_PIN Y14  IOSTANDARD LVCMOS33 } [get_ports { sonar_pw }];    ;# JC9
+set_property -dict { PACKAGE_PIN T12  IOSTANDARD LVCMOS33 } [get_ports { sonar_pw }];    ;# JC9
 
 # -----------------------------------------------------------------------------
 # HDMI TX (source) on bank 35 - TMDS_33
