@@ -61,21 +61,33 @@ set_property -dict { PACKAGE_PIN T11  IOSTANDARD LVCMOS33 } [get_ports { als_mis
 set_property -dict { PACKAGE_PIN T10  IOSTANDARD LVCMOS33 } [get_ports { als_sclk }];    ;# JC4
 
 # -----------------------------------------------------------------------------
-# Pmod JD top row (Pmod MAXSONAR, PW mode)
-#   The 6-pin MaxSonar Pmod sits in the TOP row of JD.  Per the Digilent
-#   PmodMAXSONAR reference manual, J1 pinout is:
+# Pmod JE top row (Pmod MAXSONAR, PW mode)
+#   PREVIOUSLY on JD top row (JD4=R14 / JD2=T15) but PW was reading stuck
+#   low even with the sensor plugged in and powered.  JD on the original
+#   Zybo Rev B is a *high-speed* Pmod with 0-ohm shunts in place of the
+#   normal protection resistors -- per the reference manual, "these Pmods
+#   offer no protection against short circuits", which is consistent with
+#   a pin or trace having been damaged at some point.
+#
+#   JE is the *standard* (logic-dedicated) Pmod with 200-ohm series
+#   protection resistors.  The MaxSonar PW signal is slow (147 us/inch,
+#   max ~38 ms pulse) so the series resistors do not affect timing, and
+#   the protection keeps JE robust against future mis-wiring.
+#
+#   Per the Digilent PmodMAXSONAR reference manual, J1 pinout is:
 #     Pmod pin 1=AN, 2=RX, 3=TX, 4=PWM (PW), 5=GND, 6=VCC.
-#   - PW (pulse-width output) is read on Pmod pin 4 = JD4 = R14.
+#   - PW (pulse-width output) is read on Pmod pin 4 = JE4 = H15.
 #   - RX (free-run enable) is *driven high* by the FPGA on Pmod pin 2
-#     = JD2 = T15.  Without an explicit driver, Vivado's default
+#     = JE2 = W16.  Without an explicit driver, Vivado's default
 #     PULLDOWN on unconstrained pins fights the sensor's internal
 #     pull-up and the MB1010 stays in skip-ranging mode (PW stuck low).
 #
-#   Per the Zybo Rev B physical Pmod-pin -> FPGA-pin map:
-#     JD1=T14 JD2=T15 JD3=P14 JD4=R14
+#   Per the Zybo Rev B reference manual Table 9, JE physical pins:
+#     JE1=V12 JE2=W16 JE3=J15 JE4=H15
+#     JE7=V13 JE8=U17 JE9=T17 JE10=Y17
 # -----------------------------------------------------------------------------
-set_property -dict { PACKAGE_PIN R14  IOSTANDARD LVCMOS33 } [get_ports { sonar_pw }];    ;# JD4
-set_property -dict { PACKAGE_PIN T15  IOSTANDARD LVCMOS33 } [get_ports { sonar_rx }];    ;# JD2
+set_property -dict { PACKAGE_PIN H15  IOSTANDARD LVCMOS33 } [get_ports { sonar_pw }];    ;# JE4
+set_property -dict { PACKAGE_PIN W16  IOSTANDARD LVCMOS33 } [get_ports { sonar_rx }];    ;# JE2
 
 # -----------------------------------------------------------------------------
 # HDMI TX (source) on bank 35 - TMDS_33
