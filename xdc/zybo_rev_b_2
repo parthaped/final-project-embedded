@@ -65,12 +65,17 @@ set_property -dict { PACKAGE_PIN T10  IOSTANDARD LVCMOS33 } [get_ports { als_scl
 #   The 6-pin MaxSonar Pmod sits in the TOP row of JD.  Per the Digilent
 #   PmodMAXSONAR reference manual, J1 pinout is:
 #     Pmod pin 1=AN, 2=RX, 3=TX, 4=PWM (PW), 5=GND, 6=VCC.
-#   So the pulse-width output is on Pmod pin 4, which on Zybo Rev B is JD4.
+#   - PW (pulse-width output) is read on Pmod pin 4 = JD4 = R14.
+#   - RX (free-run enable) is *driven high* by the FPGA on Pmod pin 2
+#     = JD2 = T15.  Without an explicit driver, Vivado's default
+#     PULLDOWN on unconstrained pins fights the sensor's internal
+#     pull-up and the MB1010 stays in skip-ranging mode (PW stuck low).
 #
 #   Per the Zybo Rev B physical Pmod-pin -> FPGA-pin map:
 #     JD1=T14 JD2=T15 JD3=P14 JD4=R14
 # -----------------------------------------------------------------------------
 set_property -dict { PACKAGE_PIN R14  IOSTANDARD LVCMOS33 } [get_ports { sonar_pw }];    ;# JD4
+set_property -dict { PACKAGE_PIN T15  IOSTANDARD LVCMOS33 } [get_ports { sonar_rx }];    ;# JD2
 
 # -----------------------------------------------------------------------------
 # HDMI TX (source) on bank 35 - TMDS_33
