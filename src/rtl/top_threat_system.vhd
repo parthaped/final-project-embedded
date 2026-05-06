@@ -107,6 +107,13 @@ architecture rtl of top_threat_system is
     signal blink_tick : std_logic;
     signal blink      : std_logic := '0';
 
+    -- Sonar liveness indicator: toggles on every *real* sonar reading
+    -- (i.e. data_valid pulses where the distance is non-zero, so the
+    -- watchdog "no pulse" reading does not count).  Routed to LED3
+    -- whenever the FSM is not in ALERT, so it doubles as a "PW signal
+    -- is reaching the FPGA" probe.
+    signal sonar_heartbeat : std_logic := '0';
+
     -- =========================================================================
     -- CDC: clk_sys -> clk_pixel for the live sensor values
     -- =========================================================================
@@ -248,12 +255,25 @@ begin
         end if;
     end process;
 
+    -- Sonar heartbeat: toggle on each real (non-watchdog) sonar reading.
+    process(clk_sys)
+    begin
+        if rising_edge(clk_sys) then
+            if rst_sys = '1' then
+                sonar_heartbeat <= '0';
+            elsif sonar_valid = '1' and sonar_dist /= 0 then
+                sonar_heartbeat <= not sonar_heartbeat;
+            end if;
+        end if;
+    end process;
+
     led(0) <= '1' when state_code = "000" else '0';
     led(1) <= '1' when state_code = "001" else
               '1' when state_code = "010" else '0';
     led(2) <= '1' when state_code = "011" else
               '1' when state_code = "101" else '0';
-    led(3) <= blink when state_code = "100" else '0';
+    led(3) <= blink           when state_code = "100" else
+              sonar_heartbeat;
 
     -- =========================================================================
     -- OLED
