@@ -114,6 +114,16 @@ architecture rtl of top_threat_system is
     -- is reaching the FPGA" probe.
     signal sonar_heartbeat : std_logic := '0';
 
+    -- Raw PW debug.  A 2-stage synchroniser samples the JD4 pin in
+    -- clk_sys, and the synchronised level is driven straight onto LED3
+    -- (when not in ALERT).  This bypasses the entire pulse-width
+    -- driver pipeline so we can see whether the pin is even toggling:
+    --   * fully dark           -> pin floating/low, no signal arriving
+    --   * solid bright         -> pin stuck high (sensor in fault state)
+    --   * visible duty/flicker -> pulses are arriving, driver bug is
+    --                              somewhere downstream
+    signal sonar_pw_dbg : std_logic;
+
     -- =========================================================================
     -- CDC: clk_sys -> clk_pixel for the live sensor values
     -- =========================================================================
@@ -267,13 +277,22 @@ begin
         end if;
     end process;
 
+    -- Raw PW level debug: synchronise the JD4 pin into clk_sys, drive
+    -- the level onto LED3 directly so we can probe the pin without
+    -- depending on the driver / multiply / filter pipeline being
+    -- correct.
+    sync_sonar_pw_dbg : entity work.synchronizer
+        generic map ( STAGES => 2, RST_VAL => '0' )
+        port map ( clk => clk_sys, rst => '0',
+                   d_in => sonar_pw, d_out => sonar_pw_dbg );
+
     led(0) <= '1' when state_code = "000" else '0';
     led(1) <= '1' when state_code = "001" else
               '1' when state_code = "010" else '0';
     led(2) <= '1' when state_code = "011" else
               '1' when state_code = "101" else '0';
-    led(3) <= blink           when state_code = "100" else
-              sonar_heartbeat;
+    led(3) <= blink        when state_code = "100" else
+              sonar_pw_dbg;
 
     -- =========================================================================
     -- OLED
