@@ -44,10 +44,11 @@ entity top_threat_system is
         als_sclk       : out   std_logic;
 
         sonar_pw       : in    std_logic;
-        -- Pmod MaxSonar RX pin (J1 pin 2 = JD2).  Driven high from the
-        -- FPGA so the MB1010 stays in free-run ranging mode; Vivado's
-        -- default pull-down on unconstrained pins otherwise wins
-        -- against the sensor's weak internal pull-up and freezes PW low.
+        -- Pmod MaxSonar RX pin (J1 pin 2 = JE2 on the standard Pmod).
+        -- Driven high from the FPGA so the MB1010 stays in free-run
+        -- ranging mode; Vivado's default pull-down on unconstrained
+        -- pins otherwise wins against the sensor's weak internal pull-
+        -- up and freezes PW low.
         sonar_rx       : out   std_logic;
 
         hdmi_tx_clk_p  : out   std_logic;
@@ -119,7 +120,7 @@ architecture rtl of top_threat_system is
     -- is reaching the FPGA" probe.
     signal sonar_heartbeat : std_logic := '0';
 
-    -- Raw PW debug.  A 2-stage synchroniser samples the JD4 pin in
+    -- Raw PW debug.  A 2-stage synchroniser samples the JE4 pin in
     -- clk_sys, and the synchronised level is driven straight onto LED3
     -- (when not in ALERT).  This bypasses the entire pulse-width
     -- driver pipeline so we can see whether the pin is even toggling:
@@ -128,6 +129,20 @@ architecture rtl of top_threat_system is
     --   * visible duty/flicker -> pulses are arriving, driver bug is
     --                              somewhere downstream
     signal sonar_pw_dbg : std_logic;
+
+    -- Registered '1' driver for the MaxSonar RX (range start) line.
+    -- Driving this from a register with KEEP/DONT_TOUCH stops Vivado
+    -- from collapsing it into a tied-off constant during synthesis,
+    -- guaranteeing the OBUF on the JE2 pin actively drives 3.3 V.  The
+    -- MB1010's RX input has a weak internal pull-up; we still want
+    -- this strong external drive so the sensor cannot fall into
+    -- skip-ranging mode if the FPGA pin's default state ever flips
+    -- to PULLDOWN.
+    signal sonar_rx_reg : std_logic := '1';
+    attribute KEEP        : string;
+    attribute KEEP        of sonar_rx_reg : signal is "TRUE";
+    attribute DONT_TOUCH  : string;
+    attribute DONT_TOUCH  of sonar_rx_reg : signal is "TRUE";
 
     -- =========================================================================
     -- CDC: clk_sys -> clk_pixel for the live sensor values
@@ -282,7 +297,7 @@ begin
         end if;
     end process;
 
-    -- Raw PW level debug: synchronise the JD4 pin into clk_sys, drive
+    -- Raw PW level debug: synchronise the JE4 pin into clk_sys, drive
     -- the level onto LED3 directly so we can probe the pin without
     -- depending on the driver / multiply / filter pipeline being
     -- correct.
@@ -351,7 +366,15 @@ begin
     hdmi_tx_en <= '1';
 
     -- Hold the MaxSonar RX line high so the sensor free-runs.  See
-    -- entity-port comment for why this needs to be a driven output.
-    sonar_rx <= '1';
+    -- the signal-declaration comment above for why we drive this from
+    -- a KEEP'd register instead of a bare constant assignment.
+    process(clk_sys)
+    begin
+        if rising_edge(clk_sys) then
+            sonar_rx_reg <= '1';
+        end if;
+    end process;
+
+    sonar_rx <= sonar_rx_reg;
 
 end architecture;
