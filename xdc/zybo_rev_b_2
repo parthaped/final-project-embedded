@@ -61,13 +61,16 @@ set_property -dict { PACKAGE_PIN T11  IOSTANDARD LVCMOS33 } [get_ports { als_mis
 set_property -dict { PACKAGE_PIN T10  IOSTANDARD LVCMOS33 } [get_ports { als_sclk }];    ;# JC4
 
 # -----------------------------------------------------------------------------
-# Pmod JC bottom row (Pmod MAXSONAR, PW mode)
-#   JC9 = PW input
+# Pmod JD top row (Pmod MAXSONAR, PW mode)
+#   The 6-pin MaxSonar Pmod sits in the TOP row of JD.  Per the Digilent
+#   PmodMAXSONAR reference manual, J1 pinout is:
+#     Pmod pin 1=AN, 2=RX, 3=TX, 4=PWM (PW), 5=GND, 6=VCC.
+#   So the pulse-width output is on Pmod pin 4, which on Zybo Rev B is JD4.
 #
 #   Per the Zybo Rev B physical Pmod-pin -> FPGA-pin map:
-#     JC7=W14 JC8=Y14 JC9=T12 JC10=U12
+#     JD1=T14 JD2=T15 JD3=P14 JD4=R14
 # -----------------------------------------------------------------------------
-set_property -dict { PACKAGE_PIN T12  IOSTANDARD LVCMOS33 } [get_ports { sonar_pw }];    ;# JC9
+set_property -dict { PACKAGE_PIN R14  IOSTANDARD LVCMOS33 } [get_ports { sonar_pw }];    ;# JD4
 
 # -----------------------------------------------------------------------------
 # HDMI TX (source) on bank 35 - TMDS_33
