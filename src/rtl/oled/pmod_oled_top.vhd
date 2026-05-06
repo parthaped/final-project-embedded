@@ -154,6 +154,8 @@ architecture rtl of pmod_oled_top is
     -- FILL sub-sequencer (computes text into tbuf)
     -- =========================================================================
     signal fill_cnt : integer range 0 to 31 := 0;
+    signal state_code_q : std_logic_vector(2 downto 0) := (others => '0');
+    signal severity_q   : std_logic_vector(1 downto 0) := (others => '0');
     -- Decimal-conversion scratch
     signal dist_q   : unsigned(15 downto 0) := (others => '0');
     signal dist_h   : unsigned(3 downto 0)  := (others => '0');
@@ -248,26 +250,6 @@ begin
     oled_res_n  <= res_n_r;
 
     -- =========================================================================
-    -- Decimal conversion (combinational; small enough for 8-bit / 16-bit)
-    -- =========================================================================
-    process(distance_in, als_value)
-        variable d : integer;
-        variable l : integer;
-    begin
-        d := to_integer(distance_in);
-        if d > 999 then d := 999; end if;
-        dist_h <= to_unsigned(d / 100, 4);
-        dist_t <= to_unsigned((d / 10) mod 10, 4);
-        dist_o <= to_unsigned(d mod 10, 4);
-
-        l := to_integer(als_value);
-        if l > 999 then l := 999; end if;
-        lux_h <= to_unsigned(l / 100, 4);
-        lux_t <= to_unsigned((l / 10) mod 10, 4);
-        lux_o <= to_unsigned(l mod 10, 4);
-    end process;
-
-    -- =========================================================================
     -- Main sequencer
     -- =========================================================================
     process(clk)
@@ -297,6 +279,16 @@ begin
                 rnd_col       <= 0;
                 data_cnt      <= (others => '0');
                 data_phase    <= (others => '0');
+                state_code_q  <= (others => '0');
+                severity_q    <= (others => '0');
+                dist_q        <= (others => '0');
+                dist_h        <= (others => '0');
+                dist_t        <= (others => '0');
+                dist_o        <= (others => '0');
+                lux_q         <= (others => '0');
+                lux_h         <= (others => '0');
+                lux_t         <= (others => '0');
+                lux_o         <= (others => '0');
                 tbuf          <= (others => x"20");
                 -- Initialize tbuf with TEMPLATE
                 for i in 0 to TBUF_LEN-1 loop
@@ -413,39 +405,91 @@ begin
                     -- ----------------------------------------------------
                     when S_RUN_WAIT_TICK =>
                         if refresh_pulse = '1' then
+                            state_code_q <= state_code;
+                            severity_q   <= severity;
+                            if distance_in > to_unsigned(999, distance_in'length) then
+                                dist_q <= to_unsigned(999, dist_q'length);
+                            else
+                                dist_q <= distance_in;
+                            end if;
+                            if als_value > to_unsigned(999, als_value'length) then
+                                lux_q <= to_unsigned(999, lux_q'length);
+                            else
+                                lux_q <= als_value;
+                            end if;
+                            dist_h   <= (others => '0');
+                            dist_t   <= (others => '0');
+                            dist_o   <= (others => '0');
+                            lux_h    <= (others => '0');
+                            lux_t    <= (others => '0');
+                            lux_o    <= (others => '0');
                             fill_cnt <= 0;
                             state    <= S_RUN_FILL_TEXT;
                         end if;
 
                     when S_RUN_FILL_TEXT =>
                         case fill_cnt is
+                            when 0 =>
+                                if dist_q >= to_unsigned(100, dist_q'length) then
+                                    dist_q <= dist_q - to_unsigned(100, dist_q'length);
+                                    dist_h <= dist_h + 1;
+                                else
+                                    fill_cnt <= 1;
+                                end if;
+                            when 1 =>
+                                if dist_q >= to_unsigned(10, dist_q'length) then
+                                    dist_q <= dist_q - to_unsigned(10, dist_q'length);
+                                    dist_t <= dist_t + 1;
+                                else
+                                    fill_cnt <= 2;
+                                end if;
+                            when 2 =>
+                                dist_o <= resize(dist_q, dist_o'length);
+                                fill_cnt <= 3;
+                            when 3 =>
+                                if lux_q >= to_unsigned(100, lux_q'length) then
+                                    lux_q <= lux_q - to_unsigned(100, lux_q'length);
+                                    lux_h <= lux_h + 1;
+                                else
+                                    fill_cnt <= 4;
+                                end if;
+                            when 4 =>
+                                if lux_q >= to_unsigned(10, lux_q'length) then
+                                    lux_q <= lux_q - to_unsigned(10, lux_q'length);
+                                    lux_t <= lux_t + 1;
+                                else
+                                    fill_cnt <= 5;
+                                end if;
+                            when 5 =>
+                                lux_o <= resize(lux_q, lux_o'length);
+                                fill_cnt <= 6;
                             -- State name: 8 chars at line0 positions 7..14
-                            when 0 =>  tbuf(7)  <= state_name(state_code, 0);
-                            when 1 =>  tbuf(8)  <= state_name(state_code, 1);
-                            when 2 =>  tbuf(9)  <= state_name(state_code, 2);
-                            when 3 =>  tbuf(10) <= state_name(state_code, 3);
-                            when 4 =>  tbuf(11) <= state_name(state_code, 4);
-                            when 5 =>  tbuf(12) <= state_name(state_code, 5);
-                            when 6 =>  tbuf(13) <= state_name(state_code, 6);
-                            when 7 =>  tbuf(14) <= state_name(state_code, 7);
+                            when 6 =>  tbuf(7)  <= state_name(state_code_q, 0);
+                            when 7 =>  tbuf(8)  <= state_name(state_code_q, 1);
+                            when 8 =>  tbuf(9)  <= state_name(state_code_q, 2);
+                            when 9 =>  tbuf(10) <= state_name(state_code_q, 3);
+                            when 10 => tbuf(11) <= state_name(state_code_q, 4);
+                            when 11 => tbuf(12) <= state_name(state_code_q, 5);
+                            when 12 => tbuf(13) <= state_name(state_code_q, 6);
+                            when 13 => tbuf(14) <= state_name(state_code_q, 7);
                             -- Distance: 3 digits at line1 positions 9..11
-                            when 8  => tbuf(21 + 9)  <= ascii_digit(dist_h);
-                            when 9  => tbuf(21 + 10) <= ascii_digit(dist_t);
-                            when 10 => tbuf(21 + 11) <= ascii_digit(dist_o);
+                            when 14 => tbuf(21 + 9)  <= ascii_digit(dist_h);
+                            when 15 => tbuf(21 + 10) <= ascii_digit(dist_t);
+                            when 16 => tbuf(21 + 11) <= ascii_digit(dist_o);
                             -- Lux: 3 digits at line2 positions 7..9
-                            when 11 => tbuf(42 + 7)  <= ascii_digit(lux_h);
-                            when 12 => tbuf(42 + 8)  <= ascii_digit(lux_t);
-                            when 13 => tbuf(42 + 9)  <= ascii_digit(lux_o);
+                            when 17 => tbuf(42 + 7)  <= ascii_digit(lux_h);
+                            when 18 => tbuf(42 + 8)  <= ascii_digit(lux_t);
+                            when 19 => tbuf(42 + 9)  <= ascii_digit(lux_o);
                             -- Severity: 1 digit at line3 position 7
-                            when 14 => tbuf(63 + 7)  <=
+                            when 20 => tbuf(63 + 7)  <=
                                 std_logic_vector(to_unsigned(
-                                    character'pos('0') + to_integer(unsigned(severity)), 8));
+                                    character'pos('0') + to_integer(unsigned(severity_q)), 8));
                             when others => null;
                         end case;
-                        if fill_cnt = 15 then
+                        if fill_cnt = 21 then
                             clr_cnt <= (others => '0');
                             state   <= S_RUN_CLEAR_FB;
-                        else
+                        elsif fill_cnt >= 6 then
                             fill_cnt <= fill_cnt + 1;
                         end if;
 
