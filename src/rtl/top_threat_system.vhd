@@ -44,6 +44,11 @@ entity top_threat_system is
         als_sclk       : out   std_logic;
 
         sonar_pw       : in    std_logic;
+        -- Pmod MaxSonar RX pin (J1 pin 2 = JD2).  Driven high from the
+        -- FPGA so the MB1010 stays in free-run ranging mode; Vivado's
+        -- default pull-down on unconstrained pins otherwise wins
+        -- against the sensor's weak internal pull-up and freezes PW low.
+        sonar_rx       : out   std_logic;
 
         hdmi_tx_clk_p  : out   std_logic;
         hdmi_tx_clk_n  : out   std_logic;
@@ -344,5 +349,9 @@ begin
             hdmi_tx_hpd   => hdmi_tx_hpd );
 
     hdmi_tx_en <= '1';
+
+    -- Hold the MaxSonar RX line high so the sensor free-runs.  See
+    -- entity-port comment for why this needs to be a driven output.
+    sonar_rx <= '1';
 
 end architecture;
