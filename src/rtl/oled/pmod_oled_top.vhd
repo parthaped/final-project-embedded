@@ -151,12 +151,19 @@ architecture rtl of pmod_oled_top is
     signal fb_rdata : std_logic_vector(7 downto 0);
 
     -- =========================================================================
+    -- Input pipeline registers (break long paths from filter outputs)
+    -- =========================================================================
+    signal dist_in_r : unsigned(15 downto 0) := (others => '0');
+    signal als_in_r  : unsigned(15 downto 0) := (others => '0');
+
+    -- =========================================================================
     -- FILL sub-sequencer (computes text into tbuf)
     -- =========================================================================
     signal fill_cnt : integer range 0 to 31 := 0;
     signal state_code_q : std_logic_vector(2 downto 0) := (others => '0');
     signal severity_q   : std_logic_vector(1 downto 0) := (others => '0');
-    -- Decimal-conversion scratch
+    -- Decimal-conversion scratch — DONT_TOUCH prevents Vivado from merging
+    -- these registers into a single combinational divider chain.
     signal dist_q   : unsigned(15 downto 0) := (others => '0');
     signal dist_h   : unsigned(3 downto 0)  := (others => '0');
     signal dist_t   : unsigned(3 downto 0)  := (others => '0');
@@ -165,6 +172,18 @@ architecture rtl of pmod_oled_top is
     signal lux_h    : unsigned(3 downto 0)  := (others => '0');
     signal lux_t    : unsigned(3 downto 0)  := (others => '0');
     signal lux_o    : unsigned(3 downto 0)  := (others => '0');
+
+    attribute DONT_TOUCH : string;
+    attribute DONT_TOUCH of dist_in_r : signal is "TRUE";
+    attribute DONT_TOUCH of als_in_r  : signal is "TRUE";
+    attribute DONT_TOUCH of dist_q    : signal is "TRUE";
+    attribute DONT_TOUCH of dist_h    : signal is "TRUE";
+    attribute DONT_TOUCH of dist_t    : signal is "TRUE";
+    attribute DONT_TOUCH of dist_o    : signal is "TRUE";
+    attribute DONT_TOUCH of lux_q     : signal is "TRUE";
+    attribute DONT_TOUCH of lux_h     : signal is "TRUE";
+    attribute DONT_TOUCH of lux_t     : signal is "TRUE";
+    attribute DONT_TOUCH of lux_o     : signal is "TRUE";
 
     -- =========================================================================
     -- CLEAR / RENDER sub-counters
@@ -207,6 +226,17 @@ architecture rtl of pmod_oled_top is
     end function;
 
 begin
+
+    -- =========================================================================
+    -- Input pipeline registers (reduce fanout, break long paths)
+    -- =========================================================================
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            dist_in_r <= distance_in;
+            als_in_r  <= als_value;
+        end if;
+    end process;
 
     -- =========================================================================
     -- Refresh-tick generator
@@ -407,15 +437,15 @@ begin
                         if refresh_pulse = '1' then
                             state_code_q <= state_code;
                             severity_q   <= severity;
-                            if distance_in > to_unsigned(999, distance_in'length) then
+                            if dist_in_r > to_unsigned(999, dist_in_r'length) then
                                 dist_q <= to_unsigned(999, dist_q'length);
                             else
-                                dist_q <= distance_in;
+                                dist_q <= dist_in_r;
                             end if;
-                            if als_value > to_unsigned(999, als_value'length) then
+                            if als_in_r > to_unsigned(999, als_in_r'length) then
                                 lux_q <= to_unsigned(999, lux_q'length);
                             else
-                                lux_q <= als_value;
+                                lux_q <= als_in_r;
                             end if;
                             dist_h   <= (others => '0');
                             dist_t   <= (others => '0');
