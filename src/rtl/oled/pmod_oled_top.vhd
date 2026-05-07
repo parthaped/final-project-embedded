@@ -80,6 +80,7 @@ architecture rtl of pmod_oled_top is
         S_TX_INIT_POST_LOAD,
         S_TX_INIT_POST_WAIT,
         S_RUN_WAIT_TICK,
+        S_RUN_BCD,
         S_RUN_FILL_TEXT,
         S_RUN_CLEAR_FB,
         S_RUN_RENDER,
@@ -108,7 +109,6 @@ architecture rtl of pmod_oled_top is
     signal spi_busy  : std_logic;
 
     type tbuf_t is array (0 to TBUF_LEN-1) of std_logic_vector(7 downto 0);
-    signal tbuf : tbuf_t := (others => x"20");
 
     type tbuf_const_t is array (0 to TBUF_LEN-1) of character;
     constant TEMPLATE : tbuf_const_t := (
@@ -121,6 +121,23 @@ architecture rtl of pmod_oled_top is
         -- Line 3: "SEV:         LIM:    "  (5..8=sev, 17..18=near_th)
         'S','E','V',':',' ',' ',' ',' ',' ',' ',' ',' ',' ','L','I','M',':',' ',' ',' ',' '
     );
+
+    -- Initialise tbuf at config time so we don't pay an 84-byte synchronous
+    -- reset distribution out of `rst` on every reset release.  The bitstream
+    -- carries the template values in the FF init attributes; the FSM never
+    -- needs to re-load them on reset because the per-refresh fill writes
+    -- always overwrite the volatile fields before we draw a new frame.
+    function tbuf_init return tbuf_t is
+        variable r : tbuf_t;
+    begin
+        for i in 0 to TBUF_LEN-1 loop
+            r(i) := std_logic_vector(
+                        to_unsigned(character'pos(TEMPLATE(i)), 8));
+        end loop;
+        return r;
+    end function;
+
+    signal tbuf : tbuf_t := tbuf_init;
 
     signal fb_we    : std_logic := '0';
     signal fb_waddr : unsigned(8 downto 0) := (others => '0');
@@ -143,6 +160,18 @@ architecture rtl of pmod_oled_top is
     signal range_h, range_t, range_o : unsigned(3 downto 0) := (others => '0');
     signal age_h, age_t, age_o       : unsigned(3 downto 0) := (others => '0');
     signal nth_t, nth_o              : unsigned(3 downto 0) := (others => '0');
+
+    -- Iterative BCD converter working set.  S_RUN_WAIT_TICK loads
+    -- range_q / age_q / near_th_q (already clipped); S_RUN_BCD walks
+    -- through three sub-conversions (range -> age -> near_th), each cycle
+    -- doing at most one 10-bit subtract+compare, which is the deepest
+    -- combinational path in this state.  This replaces a single-cycle
+    -- mass of /100, /10, mod 10 operations on 16-bit values that ate the
+    -- entire 8 ns clk_sys budget on -1 silicon.
+    signal bcd_in    : unsigned(9 downto 0) := (others => '0');
+    signal bcd_h     : unsigned(3 downto 0) := (others => '0');
+    signal bcd_t     : unsigned(3 downto 0) := (others => '0');
+    signal bcd_phase : unsigned(2 downto 0) := (others => '0');
 
     signal fill_cnt : integer range 0 to 63 := 0;
 
@@ -242,9 +271,6 @@ begin
     oled_res_n  <= res_n_r;
 
     process(clk)
-        variable rng_int : integer;
-        variable age_int : integer;
-        variable nth_int : integer;
     begin
         if rising_edge(clk) then
             if rst = '1' then
@@ -286,11 +312,15 @@ begin
                 age_o         <= (others => '0');
                 nth_t         <= (others => '0');
                 nth_o         <= (others => '0');
-                tbuf          <= (others => x"20");
-                for i in 0 to TBUF_LEN-1 loop
-                    tbuf(i) <=
-                        std_logic_vector(to_unsigned(character'pos(TEMPLATE(i)), 8));
-                end loop;
+                bcd_in        <= (others => '0');
+                bcd_h         <= (others => '0');
+                bcd_t         <= (others => '0');
+                bcd_phase     <= (others => '0');
+                -- tbuf intentionally NOT reset here: it is initialised at
+                -- config time via tbuf_init and refreshed in S_RUN_FILL_TEXT
+                -- before every render.  Resetting 84 bytes synchronously was
+                -- the largest single source of high-fanout endpoints on
+                -- clk_sys.
             else
                 spi_start <= '0';
                 fb_we     <= '0';
@@ -385,8 +415,12 @@ begin
                         end if;
 
                     -- ----------------------------------------------------
-                    -- Per-refresh: snapshot live data, compute BCD,
-                    -- repaint tbuf, then re-render the framebuffer.
+                    -- Per-refresh: snapshot live data and clip to the
+                    -- BCD range.  The actual decimal conversion is done
+                    -- iteratively in S_RUN_BCD over the next handful of
+                    -- cycles.  Everything here is single-cycle paths of
+                    -- at most a 16-bit subtract or compare; no /100 or
+                    -- /10 chains.
                     -- ----------------------------------------------------
                     when S_RUN_WAIT_TICK =>
                         if refresh_pulse = '1' then
@@ -394,13 +428,24 @@ begin
                             mode_q       <= ambient_mode;
                             count_q      <= count;
                             last_valid_q <= last_valid;
-                            near_th_q    <= near_th;
                             sev_q        <= last_severity;
 
                             if last_valid = '1' then
                                 range_q <= last_range_in;
                                 if t_seconds >= last_t_log then
-                                    age_q <= t_seconds - last_t_log;
+                                    -- Clip "age" to 0..999 directly here so
+                                    -- the BCD walker only ever sees a 10-bit
+                                    -- value.  Using a single 16-bit compare
+                                    -- + 16-bit subtract, both inside the
+                                    -- registered output, breaks the long
+                                    -- (16-bit sub -> /100 -> /10) chain.
+                                    if (t_seconds - last_t_log) >
+                                       to_unsigned(999, 16)
+                                    then
+                                        age_q <= to_unsigned(999, 16);
+                                    else
+                                        age_q <= t_seconds - last_t_log;
+                                    end if;
                                 else
                                     age_q <= (others => '0');
                                 end if;
@@ -409,31 +454,115 @@ begin
                                 age_q   <= (others => '0');
                             end if;
 
-                            -- BCD conversion (synthesisable for 8-bit / 16-bit
-                            -- with constant divisors).
-                            rng_int := to_integer(last_range_in);
-                            range_h <= to_unsigned(rng_int / 100,        4);
-                            range_t <= to_unsigned((rng_int / 10) mod 10, 4);
-                            range_o <= to_unsigned(rng_int mod 10,        4);
-
-                            if last_valid = '1' and t_seconds >= last_t_log then
-                                age_int := to_integer(t_seconds - last_t_log);
+                            -- Clip near_th into 0..99 here (the LIM line on
+                            -- the OLED only has space for two digits) so the
+                            -- BCD walker can run over a 7-bit input.
+                            if near_th > to_unsigned(99, 8) then
+                                near_th_q <= to_unsigned(99, 8);
                             else
-                                age_int := 0;
+                                near_th_q <= near_th;
                             end if;
-                            if age_int > 999 then age_int := 999; end if;
-                            age_h <= to_unsigned(age_int / 100,           4);
-                            age_t <= to_unsigned((age_int / 10) mod 10,   4);
-                            age_o <= to_unsigned(age_int mod 10,          4);
 
-                            nth_int := to_integer(near_th);
-                            if nth_int > 99 then nth_int := 99; end if;
-                            nth_t <= to_unsigned(nth_int / 10,            4);
-                            nth_o <= to_unsigned(nth_int mod 10,          4);
-
-                            fill_cnt <= 0;
-                            state    <= S_RUN_FILL_TEXT;
+                            -- Reset the BCD digit accumulators; the walker
+                            -- below loads them per-value.
+                            range_h   <= (others => '0');
+                            range_t   <= (others => '0');
+                            range_o   <= (others => '0');
+                            age_h     <= (others => '0');
+                            age_t     <= (others => '0');
+                            age_o     <= (others => '0');
+                            nth_t     <= (others => '0');
+                            nth_o     <= (others => '0');
+                            bcd_phase <= (others => '0');
+                            state     <= S_RUN_BCD;
                         end if;
+
+                    -- ----------------------------------------------------
+                    -- Iterative subtract-based decimal conversion.
+                    -- Phases:
+                    --   0  load `range_q` into bcd_in, clear digit accs
+                    --   1  iterate (sub 100, sub 10) for range_q
+                    --   2  load `age_q`
+                    --   3  iterate for age_q
+                    --   4  load `near_th_q`
+                    --   5  iterate for near_th_q
+                    -- The "iterate" cycles do at most one 10-bit subtract
+                    -- and one 10-bit compare per clock; max ~19 cycles per
+                    -- value (worst case 999 = 9*100 + 9*10 + 9), giving
+                    -- ~60 cycles total per refresh, vastly inside the
+                    -- ~4M-cycle budget between 30 Hz refreshes.
+                    -- ----------------------------------------------------
+                    when S_RUN_BCD =>
+                        case to_integer(bcd_phase) is
+                            when 0 =>
+                                bcd_in    <= resize(range_q, bcd_in'length);
+                                bcd_h     <= (others => '0');
+                                bcd_t     <= (others => '0');
+                                bcd_phase <= to_unsigned(1, bcd_phase'length);
+
+                            when 1 =>
+                                if bcd_in >= to_unsigned(100, bcd_in'length) then
+                                    bcd_in <= bcd_in
+                                            - to_unsigned(100, bcd_in'length);
+                                    bcd_h  <= bcd_h + 1;
+                                elsif bcd_in >= to_unsigned(10, bcd_in'length) then
+                                    bcd_in <= bcd_in
+                                            - to_unsigned(10, bcd_in'length);
+                                    bcd_t  <= bcd_t + 1;
+                                else
+                                    range_h   <= bcd_h;
+                                    range_t   <= bcd_t;
+                                    range_o   <= bcd_in(3 downto 0);
+                                    bcd_phase <= to_unsigned(2, bcd_phase'length);
+                                end if;
+
+                            when 2 =>
+                                bcd_in    <= resize(age_q(9 downto 0),
+                                                    bcd_in'length);
+                                bcd_h     <= (others => '0');
+                                bcd_t     <= (others => '0');
+                                bcd_phase <= to_unsigned(3, bcd_phase'length);
+
+                            when 3 =>
+                                if bcd_in >= to_unsigned(100, bcd_in'length) then
+                                    bcd_in <= bcd_in
+                                            - to_unsigned(100, bcd_in'length);
+                                    bcd_h  <= bcd_h + 1;
+                                elsif bcd_in >= to_unsigned(10, bcd_in'length) then
+                                    bcd_in <= bcd_in
+                                            - to_unsigned(10, bcd_in'length);
+                                    bcd_t  <= bcd_t + 1;
+                                else
+                                    age_h     <= bcd_h;
+                                    age_t     <= bcd_t;
+                                    age_o     <= bcd_in(3 downto 0);
+                                    bcd_phase <= to_unsigned(4, bcd_phase'length);
+                                end if;
+
+                            when 4 =>
+                                bcd_in    <= resize(near_th_q, bcd_in'length);
+                                bcd_h     <= (others => '0');
+                                bcd_t     <= (others => '0');
+                                bcd_phase <= to_unsigned(5, bcd_phase'length);
+
+                            when 5 =>
+                                if bcd_in >= to_unsigned(10, bcd_in'length) then
+                                    bcd_in <= bcd_in
+                                            - to_unsigned(10, bcd_in'length);
+                                    bcd_t  <= bcd_t + 1;
+                                else
+                                    -- nth has only two digits; tens=bcd_t,
+                                    -- ones=remaining bcd_in.  Hundreds is
+                                    -- discarded (clipped to 99 upstream).
+                                    nth_t    <= bcd_t;
+                                    nth_o    <= bcd_in(3 downto 0);
+                                    fill_cnt <= 0;
+                                    state    <= S_RUN_FILL_TEXT;
+                                end if;
+
+                            when others =>
+                                state <= S_RUN_FILL_TEXT;
+                        end case;
 
                     when S_RUN_FILL_TEXT =>
                         case fill_cnt is
