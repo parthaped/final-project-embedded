@@ -212,17 +212,6 @@ architecture rtl of top_threat_system is
     signal blink_tick    : std_logic;
     signal blink_quarter : std_logic := '0';
 
-    signal sonar_heartbeat : std_logic := '0';
-    signal sonar_pw_dbg    : std_logic;
-
-    -- Registered '1' driver for the MaxSonar RX line; KEEP/DONT_TOUCH
-    -- prevents Vivado from collapsing the OBUF.
-    signal sonar_rx_reg : std_logic := '1';
-    attribute KEEP        : string;
-    attribute KEEP        of sonar_rx_reg : signal is "TRUE";
-    attribute DONT_TOUCH  : string;
-    attribute DONT_TOUCH  of sonar_rx_reg : signal is "TRUE";
-
     -- =========================================================================
     -- CDC: clk_sys -> clk_pixel for the HDMI console.
     -- =========================================================================
@@ -699,20 +688,6 @@ begin
             hdmi_tx_d_p     => hdmi_tx_d_p,
             hdmi_tx_d_n     => hdmi_tx_d_n,
             hdmi_tx_hpd     => hdmi_tx_hpd );
-
-    hdmi_tx_en <= '1';
-
-    -- Hold the MaxSonar RX line high so the sensor free-runs.  See
-    -- the signal-declaration comment above for why we drive this from
-    -- a KEEP'd register instead of a bare constant assignment.
-    process(clk_sys)
-    begin
-        if rising_edge(clk_sys) then
-            sonar_rx_reg <= '1';
-        end if;
-    end process;
-
-    sonar_rx <= sonar_rx_reg;
 
     hdmi_tx_en <= '1';
 
