@@ -21,14 +21,20 @@ set rtl_files {
     src/rtl/oled/oled_init_rom.vhd
     src/rtl/oled/font_5x8_rom.vhd
 
+    src/rtl/sensors/contact_pkg.vhd
+    src/rtl/hdmi/font_render_pkg.vhd
+
     src/rtl/common/synchronizer.vhd
     src/rtl/common/debouncer.vhd
     src/rtl/common/pulse_gen.vhd
     src/rtl/common/moving_average8.vhd
+    src/rtl/common/system_clock.vhd
 
     src/rtl/sensors/pmod_als_spi.vhd
     src/rtl/sensors/pmod_maxsonar_pw.vhd
+    src/rtl/sensors/ambient_mode_detect.vhd
     src/rtl/sensors/threshold_detect.vhd
+    src/rtl/sensors/contact_log.vhd
 
     src/rtl/fsm/threat_fsm.vhd
 
@@ -38,7 +44,12 @@ set rtl_files {
 
     src/rtl/hdmi/clk_wiz_hdmi.vhd
     src/rtl/hdmi/vga_timing_640x480.vhd
-    src/rtl/hdmi/radar_renderer.vhd
+    src/rtl/hdmi/history_buffer.vhd
+    src/rtl/hdmi/risk_banner_renderer.vhd
+    src/rtl/hdmi/risk_matrix_renderer.vhd
+    src/rtl/hdmi/strip_chart_renderer.vhd
+    src/rtl/hdmi/event_log_renderer.vhd
+    src/rtl/hdmi/console_renderer.vhd
     src/rtl/hdmi/tmds_encoder.vhd
     src/rtl/hdmi/tmds_serializer.vhd
     src/rtl/hdmi/hdmi_top.vhd

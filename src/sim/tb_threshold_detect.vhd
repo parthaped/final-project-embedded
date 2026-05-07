@@ -1,15 +1,17 @@
 -- ============================================================================
 -- tb_threshold_detect.vhd
---   Walks the threshold comparator through every meaningful (sonar, als)
---   region and asserts the resulting trig / sonar_trig / als_trig / ok /
---   conf flags after the 2-cycle output pipeline has settled.
+--   Walks the reworked threshold comparator through every meaningful
+--   (sonar_band, ambient_mode) cell in the severity table and asserts
+--   the resulting severity_now / sonar_alert / sonar_warn / trig flags
+--   after the 2-cycle output pipeline has settled.
 --
---   Recall:
---     son_t  := sonar_in > 0  AND  sonar_in < SONAR_NEAR_TH
---     als_t  := als_value < ALS_DARK_TH  OR  als_value > ALS_BRIGHT_TH
---     trig   := son_t or als_t
---     ok     := son_t and als_t          (multi-sensor agreement)
---     conf   := son_t and not als_t      (single-sensor confirm)
+--   Severity table (matches threshold_detect.vhd and the project plan):
+--       alert + DAY     -> LOW    "00"
+--       alert + DIM     -> MED    "01"
+--       alert + NIGHT   -> HIGH   "10"
+--       alert + BRIGHT  -> CRIT   "11"
+--       warn  + DIM/NIGHT -> LOW  "00"   (and trig=1)
+--       warn  + DAY/BRIGHT -> trig=0 (warn does not promote in good light)
 -- ============================================================================
 
 library ieee;
@@ -22,38 +24,43 @@ end entity;
 architecture sim of tb_threshold_detect is
     constant CLK_PERIOD : time := 10 ns;
 
-    constant SONAR_NEAR : positive := 24;
-    constant ALS_DARK   : natural  := 32;
-    constant ALS_BRIGHT : natural  := 220;
+    -- Ambient codes (must match ambient_mode_detect / threshold_detect).
+    constant A_NIGHT  : unsigned(1 downto 0) := "00";
+    constant A_DIM    : unsigned(1 downto 0) := "01";
+    constant A_DAY    : unsigned(1 downto 0) := "10";
+    constant A_BRIGHT : unsigned(1 downto 0) := "11";
 
-    signal clk        : std_logic := '0';
-    signal rst        : std_logic := '1';
-    signal als_value  : unsigned(15 downto 0) := (others => '0');
-    signal sonar_in   : unsigned(15 downto 0) := (others => '0');
+    constant SEV_LOW  : unsigned(1 downto 0) := "00";
+    constant SEV_MED  : unsigned(1 downto 0) := "01";
+    constant SEV_HIGH : unsigned(1 downto 0) := "10";
+    constant SEV_CRIT : unsigned(1 downto 0) := "11";
 
-    signal trig       : std_logic;
-    signal sonar_trig : std_logic;
-    signal als_trig   : std_logic;
-    signal ok         : std_logic;
-    signal conf       : std_logic;
+    signal clk           : std_logic := '0';
+    signal rst           : std_logic := '1';
+    signal sonar_in      : unsigned(15 downto 0) := (others => '0');
+    signal ambient_mode  : unsigned(1 downto 0)  := A_DAY;
+    signal sonar_near_th : unsigned(7 downto 0)  := to_unsigned(24, 8);
+    signal sonar_warn_th : unsigned(7 downto 0)  := to_unsigned(48, 8);
+
+    signal sonar_alert   : std_logic;
+    signal sonar_warn    : std_logic;
+    signal trig          : std_logic;
+    signal severity_now  : unsigned(1 downto 0);
 begin
     clk <= not clk after CLK_PERIOD/2;
 
     dut : entity work.threshold_detect
-        generic map (
-            SONAR_NEAR_TH => SONAR_NEAR,
-            ALS_DARK_TH   => ALS_DARK,
-            ALS_BRIGHT_TH => ALS_BRIGHT )
         port map (
-            clk        => clk,
-            rst        => rst,
-            als_value  => als_value,
-            sonar_in   => sonar_in,
-            trig       => trig,
-            sonar_trig => sonar_trig,
-            als_trig   => als_trig,
-            ok         => ok,
-            conf       => conf );
+            clk           => clk,
+            rst           => rst,
+            sonar_in      => sonar_in,
+            ambient_mode  => ambient_mode,
+            sonar_near_th => sonar_near_th,
+            sonar_warn_th => sonar_warn_th,
+            sonar_alert   => sonar_alert,
+            sonar_warn    => sonar_warn,
+            trig          => trig,
+            severity_now  => severity_now );
 
     main : process
         procedure tick(n : integer := 1) is
@@ -63,125 +70,125 @@ begin
             end loop;
         end procedure;
 
-        -- Apply (sonar, als), let the 2-cycle output pipeline settle, then
-        -- check every flag.
         procedure check (
             sonar    : integer;
-            als      : integer;
-            e_son    : std_logic;
-            e_als    : std_logic;
+            amb      : unsigned(1 downto 0);
+            e_alert  : std_logic;
+            e_warn   : std_logic;
             e_trig   : std_logic;
-            e_ok     : std_logic;
-            e_conf   : std_logic;
+            e_sev    : unsigned(1 downto 0);
             tag      : string )
         is
         begin
-            sonar_in  <= to_unsigned(sonar, sonar_in'length);
-            als_value <= to_unsigned(als,   als_value'length);
-            tick(3);   -- 2 register stages + 1 cycle of slack
-            assert sonar_trig = e_son
-                report tag & ": sonar_trig expected " & to_string(e_son) &
-                       " got " & to_string(sonar_trig)
+            sonar_in     <= to_unsigned(sonar, sonar_in'length);
+            ambient_mode <= amb;
+            tick(4);
+            assert sonar_alert = e_alert
+                report tag & ": sonar_alert expected " & to_string(e_alert) &
+                       " got " & to_string(sonar_alert)
                 severity failure;
-            assert als_trig = e_als
-                report tag & ": als_trig expected " & to_string(e_als) &
-                       " got " & to_string(als_trig)
+            assert sonar_warn = e_warn
+                report tag & ": sonar_warn expected " & to_string(e_warn) &
+                       " got " & to_string(sonar_warn)
                 severity failure;
             assert trig = e_trig
                 report tag & ": trig expected " & to_string(e_trig) &
                        " got " & to_string(trig)
                 severity failure;
-            assert ok = e_ok
-                report tag & ": ok expected " & to_string(e_ok) &
-                       " got " & to_string(ok)
-                severity failure;
-            assert conf = e_conf
-                report tag & ": conf expected " & to_string(e_conf) &
-                       " got " & to_string(conf)
-                severity failure;
+            -- severity is don't-care when no band is asserted; only
+            -- check it where the contact_log would actually sample it.
+            if (e_alert = '1') or (e_warn = '1' and e_trig = '1') then
+                assert severity_now = e_sev
+                    report tag & ": severity_now expected " & to_string(e_sev) &
+                           " got " & to_string(severity_now)
+                    severity failure;
+            end if;
         end procedure;
     begin
         tick(3);
         rst <= '0';
         tick(2);
 
-        -- All-zero inputs -> nothing should trigger (sonar=0 is treated as
-        -- "no valid sample" and ignored; als=0 is < dark_th, so als_trig=1).
-        check(sonar => 0, als => 0,
-              e_son => '0', e_als => '1',
-              e_trig => '1', e_ok => '0', e_conf => '0',
-              tag => "all-zero");
+        -- Far away in any ambient -> nothing fires.
+        check(sonar => 100, amb => A_DAY,
+              e_alert => '0', e_warn => '0',
+              e_trig => '0', e_sev => SEV_LOW,
+              tag => "safe-far DAY");
 
-        -- Mid-band, far away: nothing should trigger.
-        check(sonar => 100, als => 128,
-              e_son => '0', e_als => '0',
-              e_trig => '0', e_ok => '0', e_conf => '0',
-              tag => "safe-band");
+        -- alert + DAY    -> LOW
+        check(sonar => 12, amb => A_DAY,
+              e_alert => '1', e_warn => '0',
+              e_trig => '1', e_sev => SEV_LOW,
+              tag => "alert+DAY");
 
-        -- Single-sensor confirm: object close, ambient mid-range.
-        -- sonar=10 < 24, als=128 (32..220). conf must assert, ok must not.
-        check(sonar => 10, als => 128,
-              e_son => '1', e_als => '0',
-              e_trig => '1', e_ok => '0', e_conf => '1',
-              tag => "near+midALS");
+        -- alert + DIM    -> MED  (this is the path the original build
+        -- could never reach; verifies the fix.)
+        check(sonar => 12, amb => A_DIM,
+              e_alert => '1', e_warn => '0',
+              e_trig => '1', e_sev => SEV_MED,
+              tag => "alert+DIM");
 
-        -- Multi-sensor agreement: close object AND dark room.
-        check(sonar => 5, als => 5,
-              e_son => '1', e_als => '1',
-              e_trig => '1', e_ok => '1', e_conf => '0',
-              tag => "near+dark");
+        -- alert + NIGHT  -> HIGH
+        check(sonar => 8, amb => A_NIGHT,
+              e_alert => '1', e_warn => '0',
+              e_trig => '1', e_sev => SEV_HIGH,
+              tag => "alert+NIGHT");
 
-        -- Multi-sensor agreement: close object AND very bright.
-        check(sonar => 12, als => 250,
-              e_son => '1', e_als => '1',
-              e_trig => '1', e_ok => '1', e_conf => '0',
-              tag => "near+bright");
+        -- alert + BRIGHT -> CRIT
+        check(sonar => 8, amb => A_BRIGHT,
+              e_alert => '1', e_warn => '0',
+              e_trig => '1', e_sev => SEV_CRIT,
+              tag => "alert+BRIGHT");
 
-        -- ALS-only trigger (dark): no close object.
-        check(sonar => 200, als => 10,
-              e_son => '0', e_als => '1',
-              e_trig => '1', e_ok => '0', e_conf => '0',
-              tag => "far+dark");
+        -- warn + DIM     -> LOW (trig promoted because ambient is dark)
+        check(sonar => 36, amb => A_DIM,
+              e_alert => '0', e_warn => '1',
+              e_trig => '1', e_sev => SEV_LOW,
+              tag => "warn+DIM");
 
-        -- ALS-only trigger (bright): no close object.
-        check(sonar => 200, als => 240,
-              e_son => '0', e_als => '1',
-              e_trig => '1', e_ok => '0', e_conf => '0',
-              tag => "far+bright");
+        -- warn + NIGHT   -> LOW (trig promoted)
+        check(sonar => 36, amb => A_NIGHT,
+              e_alert => '0', e_warn => '1',
+              e_trig => '1', e_sev => SEV_LOW,
+              tag => "warn+NIGHT");
 
-        -- Boundary: sonar exactly equal to threshold should NOT trigger
-        -- (strict less-than).
-        check(sonar => SONAR_NEAR, als => 128,
-              e_son => '0', e_als => '0',
-              e_trig => '0', e_ok => '0', e_conf => '0',
-              tag => "sonar=NEAR_TH (boundary)");
+        -- warn + DAY     -> trig=0 (warn does NOT promote in good light)
+        check(sonar => 36, amb => A_DAY,
+              e_alert => '0', e_warn => '1',
+              e_trig => '0', e_sev => SEV_LOW,
+              tag => "warn+DAY (no trig)");
 
-        -- Boundary: sonar = NEAR_TH - 1 should trigger.
-        check(sonar => SONAR_NEAR - 1, als => 128,
-              e_son => '1', e_als => '0',
-              e_trig => '1', e_ok => '0', e_conf => '1',
-              tag => "sonar=NEAR_TH-1 (boundary)");
+        -- warn + BRIGHT  -> trig=0 likewise
+        check(sonar => 36, amb => A_BRIGHT,
+              e_alert => '0', e_warn => '1',
+              e_trig => '0', e_sev => SEV_LOW,
+              tag => "warn+BRIGHT (no trig)");
 
-        -- Boundary: als exactly at DARK_TH should NOT trigger
-        -- (strict less-than for dark; strict greater-than for bright).
-        check(sonar => 100, als => ALS_DARK,
-              e_son => '0', e_als => '0',
-              e_trig => '0', e_ok => '0', e_conf => '0',
-              tag => "als=DARK_TH (boundary)");
+        -- Boundary: sonar exactly at near_th should NOT alert.
+        check(sonar => 24, amb => A_DAY,
+              e_alert => '0', e_warn => '1',
+              e_trig => '0', e_sev => SEV_LOW,
+              tag => "sonar=NEAR (warn band)");
 
-        check(sonar => 100, als => ALS_BRIGHT,
-              e_son => '0', e_als => '0',
-              e_trig => '0', e_ok => '0', e_conf => '0',
-              tag => "als=BRIGHT_TH (boundary)");
+        -- Boundary: sonar = near_th - 1 should alert.
+        check(sonar => 23, amb => A_DAY,
+              e_alert => '1', e_warn => '0',
+              e_trig => '1', e_sev => SEV_LOW,
+              tag => "sonar=NEAR-1 (alert)");
+
+        -- sonar=0 is "no sample"; never trips.
+        check(sonar => 0, amb => A_NIGHT,
+              e_alert => '0', e_warn => '0',
+              e_trig => '0', e_sev => SEV_LOW,
+              tag => "sonar=0 (no sample)");
 
         -- Reset clears all outputs.
-        sonar_in  <= to_unsigned(5, sonar_in'length);
-        als_value <= to_unsigned(5, als_value'length);
-        tick(3);
+        sonar_in     <= to_unsigned(8, sonar_in'length);
+        ambient_mode <= A_NIGHT;
+        tick(4);
         rst <= '1';
-        tick(2);
-        assert (trig = '0') and (sonar_trig = '0') and (als_trig = '0') and
-               (ok = '0') and (conf = '0')
+        tick(3);
+        assert (trig = '0') and (sonar_alert = '0') and (sonar_warn = '0')
             report "threshold_detect: outputs not cleared by reset"
             severity failure;
 

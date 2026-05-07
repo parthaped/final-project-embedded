@@ -1,14 +1,17 @@
 -- ============================================================================
 -- hdmi_top.vhd
---   Wires together the VGA timing generator, the radar renderer, three
---   TMDS encoders and four TMDS serializers (R / G / B / clock) to drive
---   the on-board HDMI TX port in DVI mode.
+--   Wires together the VGA timing generator, the perimeter-monitor
+--   console renderer, three TMDS encoders, and four TMDS serializers
+--   (R / G / B / clock) to drive the on-board HDMI TX port in DVI
+--   mode.
 --
---   Clock channel:  Sends the constant 10-bit pattern "1111100000" so the
---                   sink recovers a clock at f_pixel.
+--   Replaces the previous fixed-content radar_renderer with the
+--   richer console_renderer that composes the risk banner, risk
+--   matrix, dual strip chart, timestamped event log, header strip,
+--   and severity border.
 --
---   DVI channel mapping (DDC EDID is unused; we drive HPD high to convince
---   most monitors to lock without it):
+--   DVI channel mapping (no DDC EDID is read; HPD is asserted high to
+--   convince most monitors to lock):
 --       Channel 0 = Blue   (carries c0=hsync, c1=vsync during blanking)
 --       Channel 1 = Green  (c0=c1=0)
 --       Channel 2 = Red    (c0=c1=0)
@@ -21,14 +24,28 @@ use ieee.numeric_std.all;
 library unisim;
 use unisim.vcomponents.all;
 
+use work.contact_pkg.all;
+
 entity hdmi_top is
     port (
         clk_pixel    : in  std_logic;
         clk_serial   : in  std_logic;
         rst          : in  std_logic;
 
-        distance_in  : in  unsigned(15 downto 0);
-        als_value    : in  unsigned(15 downto 0);
+        -- Live system state (must already be in clk_pixel domain).
+        range_in        : in  unsigned(7 downto 0);
+        als_value       : in  unsigned(7 downto 0);
+        ambient_mode    : in  unsigned(1 downto 0);
+        severity_now    : in  unsigned(1 downto 0);
+        presence        : in  std_logic;
+        log_pulse_pixel : in  std_logic;
+        sev_value       : in  unsigned(1 downto 0);
+        contacts        : in  contact_array_t;
+        count           : in  unsigned(3 downto 0);
+        t_seconds       : in  unsigned(15 downto 0);
+        arm             : in  std_logic;
+        near_th         : in  unsigned(7 downto 0);
+        warn_th         : in  unsigned(7 downto 0);
 
         hdmi_tx_clk_p : out std_logic;
         hdmi_tx_clk_n : out std_logic;
@@ -39,26 +56,19 @@ entity hdmi_top is
 end entity;
 
 architecture rtl of hdmi_top is
-    -- VGA timing
     signal x_t, y_t       : unsigned(9 downto 0);
     signal de_t, hs_t, vs_t : std_logic;
 
-    -- Renderer outputs
     signal red, green, blue : std_logic_vector(7 downto 0);
     signal de_r, hs_r, vs_r : std_logic;
 
-    -- Encoder outputs
     signal q_b, q_g, q_r : std_logic_vector(9 downto 0);
 
-    -- TMDS clock pattern
     constant CLK_PATTERN : std_logic_vector(9 downto 0) := "1111100000";
 begin
 
     hdmi_tx_hpd <= '1';
 
-    -- ---------------------------------------------------------------
-    -- Pixel pipeline: timing -> renderer
-    -- ---------------------------------------------------------------
     timing_i : entity work.vga_timing_640x480
         port map (
             clk_pixel => clk_pixel,
@@ -69,27 +79,35 @@ begin
             hsync     => hs_t,
             vsync     => vs_t );
 
-    radar_i : entity work.radar_renderer
+    console_i : entity work.console_renderer
         port map (
-            clk_pixel   => clk_pixel,
-            rst         => rst,
-            x_in        => x_t,
-            y_in        => y_t,
-            de_in       => de_t,
-            hsync_in    => hs_t,
-            vsync_in    => vs_t,
-            distance_in => distance_in,
-            als_value   => als_value,
-            red         => red,
-            green       => green,
-            blue        => blue,
-            de_out      => de_r,
-            hsync_out   => hs_r,
-            vsync_out   => vs_r );
+            clk_pixel       => clk_pixel,
+            rst             => rst,
+            x_in            => x_t,
+            y_in            => y_t,
+            de_in           => de_t,
+            hsync_in        => hs_t,
+            vsync_in        => vs_t,
+            range_in        => range_in,
+            als_value       => als_value,
+            ambient_mode    => ambient_mode,
+            severity_now    => severity_now,
+            presence        => presence,
+            log_pulse_pixel => log_pulse_pixel,
+            sev_value       => sev_value,
+            contacts        => contacts,
+            count           => count,
+            t_seconds       => t_seconds,
+            arm             => arm,
+            near_th         => near_th,
+            warn_th         => warn_th,
+            red             => red,
+            green           => green,
+            blue            => blue,
+            de_out          => de_r,
+            hsync_out       => hs_r,
+            vsync_out       => vs_r );
 
-    -- ---------------------------------------------------------------
-    -- TMDS encoders (per channel)
-    -- ---------------------------------------------------------------
     enc_b : entity work.tmds_encoder
         port map ( clk_pixel => clk_pixel, rst => rst,
                    d => blue, c0 => hs_r, c1 => vs_r, de => de_r,
@@ -105,9 +123,6 @@ begin
                    d => red, c0 => '0', c1 => '0', de => de_r,
                    q_out => q_r );
 
-    -- ---------------------------------------------------------------
-    -- Serializers + differential output buffers
-    -- ---------------------------------------------------------------
     ser_b : entity work.tmds_serializer
         port map ( clk_pixel => clk_pixel, clk_serial => clk_serial, rst => rst,
                    data_in => q_b, d_p => hdmi_tx_d_p(0), d_n => hdmi_tx_d_n(0) );

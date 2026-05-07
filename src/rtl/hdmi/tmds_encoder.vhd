@@ -66,7 +66,7 @@ begin
             else
                 if de = '0' then
                     -- Control symbols.
-                    case (c1 & c0) is
+                    case std_logic_vector'(c1 & c0) is
                         when "00"   => q_o := "1101010100";
                         when "01"   => q_o := "0010101011";
                         when "10"   => q_o := "0101010100";

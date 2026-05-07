@@ -26,10 +26,10 @@ architecture sim of tb_oled_init is
     signal clk          : std_logic := '0';
     signal rst          : std_logic := '1';
 
-    signal state_code   : std_logic_vector(2 downto 0) := "000";
-    signal distance_in  : unsigned(15 downto 0) := to_unsigned(42, 16);
-    signal als_value    : unsigned(15 downto 0) := to_unsigned(123, 16);
-    signal severity     : std_logic_vector(1 downto 0) := "00";
+    signal state_code     : std_logic_vector(2 downto 0) := "000";
+    signal distance_in    : unsigned(15 downto 0) := to_unsigned(42, 16);
+    signal als_value      : unsigned(15 downto 0) := to_unsigned(123, 16);
+    signal severity_score : std_logic_vector(1 downto 0) := "00";
 
     signal cs_n   : std_logic;
     signal mosi   : std_logic;
@@ -61,10 +61,10 @@ begin
         port map (
             clk          => clk,
             rst          => rst,
-            state_code   => state_code,
-            distance_in  => distance_in,
-            als_value    => als_value,
-            severity     => severity,
+            state_code     => state_code,
+            distance_in    => distance_in,
+            als_value      => als_value,
+            severity_score => severity_score,
             oled_cs_n    => cs_n,
             oled_mosi    => mosi,
             oled_sclk    => sclk,

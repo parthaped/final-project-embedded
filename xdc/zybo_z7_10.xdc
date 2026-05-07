@@ -1,57 +1,108 @@
 # =============================================================================
-# Zybo Z7-10 (xc7z010clg400-1) constraints for the Smart Threat Detection
-# system.  Only the pins used by this project are uncommented.
+# Constraints for the Smart Threat Detection system on the *original* Zybo
+# (Rev B, xc7z010clg400-1).  Only the pins used by this project are populated.
 #
-# Reference: Digilent Zybo Z7 Master XDC.
+# NOTE: this is the OLDER Zybo, not the Zybo Z7-10.  Pinout taken from the
+#       Digilent Zybo Rev B master XDC.  Differences vs. Z7-10:
+#         - 125 MHz sysclk on L16 (instead of K17)
+#         - BTN0 on R18  (instead of K18)
+#         - Different Pmod JB / JC bank pins
+#         - HDMI uses an on-board TPD12S016 level shifter whose enable pin
+#           (HDMI_OUT_EN, F17) MUST be driven high or the HDMI TX is dead.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# 125 MHz on-board clock (PL)
+# 125 MHz on-board clock (PL)  -- Sch=sysclk
 # -----------------------------------------------------------------------------
-set_property -dict { PACKAGE_PIN K17  IOSTANDARD LVCMOS33 } [get_ports { sysclk }];
+set_property -dict { PACKAGE_PIN L16  IOSTANDARD LVCMOS33 } [get_ports { sysclk }];
 create_clock -add -name sys_clk_pin -period 8.000 -waveform {0 4} [get_ports { sysclk }];
 
 # -----------------------------------------------------------------------------
 # Buttons (active high)
 #   BTN0 -> start, BTN3 -> reset
 # -----------------------------------------------------------------------------
-set_property -dict { PACKAGE_PIN K18  IOSTANDARD LVCMOS33 } [get_ports { btn_start  }];   ;# BTN0
-set_property -dict { PACKAGE_PIN Y16  IOSTANDARD LVCMOS33 } [get_ports { btn_reset  }];   ;# BTN3
+set_property -dict { PACKAGE_PIN R18  IOSTANDARD LVCMOS33 } [get_ports { btn_start }];   ;# BTN0
+set_property -dict { PACKAGE_PIN Y16  IOSTANDARD LVCMOS33 } [get_ports { btn_reset }];   ;# BTN3
 
 # -----------------------------------------------------------------------------
 # LEDs (LD0..LD3)
 # -----------------------------------------------------------------------------
-set_property -dict { PACKAGE_PIN M14  IOSTANDARD LVCMOS33 } [get_ports { led[0] }];       ;# LD0
-set_property -dict { PACKAGE_PIN M15  IOSTANDARD LVCMOS33 } [get_ports { led[1] }];       ;# LD1
-set_property -dict { PACKAGE_PIN G14  IOSTANDARD LVCMOS33 } [get_ports { led[2] }];       ;# LD2
-set_property -dict { PACKAGE_PIN D18  IOSTANDARD LVCMOS33 } [get_ports { led[3] }];       ;# LD3
+set_property -dict { PACKAGE_PIN M14  IOSTANDARD LVCMOS33 } [get_ports { led[0] }];      ;# LD0
+set_property -dict { PACKAGE_PIN M15  IOSTANDARD LVCMOS33 } [get_ports { led[1] }];      ;# LD1
+set_property -dict { PACKAGE_PIN G14  IOSTANDARD LVCMOS33 } [get_ports { led[2] }];      ;# LD2
+set_property -dict { PACKAGE_PIN D18  IOSTANDARD LVCMOS33 } [get_ports { led[3] }];      ;# LD3
+
+# -----------------------------------------------------------------------------
+# Slide switches (SW0..SW3)
+#   SW0 -> arm           (system armed and watching for intrusions)
+#   SW1 -> sensitivity   ('0' = standard 24/48 in, '1' = paranoid 36/72 in)
+#   SW2 -> clear log     (drains contact_log on rising edge / while held)
+#   SW3 -> test inject   (synthesises one fake contact per second for demo)
+#
+# Per the Zybo Rev B reference manual Table 12, slide-switch FPGA pins are:
+#   SW0=G15 SW1=P15 SW2=W13 SW3=T16
+# -----------------------------------------------------------------------------
+set_property -dict { PACKAGE_PIN G15  IOSTANDARD LVCMOS33 } [get_ports { sw[0] }];       ;# SW0
+set_property -dict { PACKAGE_PIN P15  IOSTANDARD LVCMOS33 } [get_ports { sw[1] }];       ;# SW1
+set_property -dict { PACKAGE_PIN W13  IOSTANDARD LVCMOS33 } [get_ports { sw[2] }];       ;# SW2
+set_property -dict { PACKAGE_PIN T16  IOSTANDARD LVCMOS33 } [get_ports { sw[3] }];       ;# SW3
 
 # -----------------------------------------------------------------------------
 # Pmod JB (Pmod OLED, SSD1306, 12-pin)
-#   JB1=CS  JB2=MOSI JB3=(unused) JB4=SCK
-#   JB7=DC  JB8=RES  JB9=VBATC    JB10=VDDC
+#   Top row    : JB1=CS    JB2=MOSI  JB3=(unused)  JB4=SCK
+#   Bottom row : JB7=DC    JB8=RES   JB9=VBATC     JB10=VDDC
+#
+#   Per the Zybo Rev B physical Pmod-pin -> FPGA-pin map:
+#     JB1=T20 JB2=U20 JB3=V20 JB4=W20  (top row)
+#     JB7=Y18 JB8=Y19 JB9=W18 JB10=W19 (bottom row)
 # -----------------------------------------------------------------------------
-set_property -dict { PACKAGE_PIN V8   IOSTANDARD LVCMOS33 } [get_ports { oled_cs_n  }];   ;# JB1
-set_property -dict { PACKAGE_PIN W8   IOSTANDARD LVCMOS33 } [get_ports { oled_mosi  }];   ;# JB2
-set_property -dict { PACKAGE_PIN V7   IOSTANDARD LVCMOS33 } [get_ports { oled_sclk  }];   ;# JB4
-set_property -dict { PACKAGE_PIN Y7   IOSTANDARD LVCMOS33 } [get_ports { oled_dc    }];   ;# JB7
-set_property -dict { PACKAGE_PIN Y6   IOSTANDARD LVCMOS33 } [get_ports { oled_res_n }];   ;# JB8
-set_property -dict { PACKAGE_PIN V6   IOSTANDARD LVCMOS33 } [get_ports { oled_vbat_n }];  ;# JB9
-set_property -dict { PACKAGE_PIN W6   IOSTANDARD LVCMOS33 } [get_ports { oled_vdd_n }];   ;# JB10
+set_property -dict { PACKAGE_PIN T20  IOSTANDARD LVCMOS33 } [get_ports { oled_cs_n   }]; ;# JB1
+set_property -dict { PACKAGE_PIN U20  IOSTANDARD LVCMOS33 } [get_ports { oled_mosi   }]; ;# JB2
+set_property -dict { PACKAGE_PIN W20  IOSTANDARD LVCMOS33 } [get_ports { oled_sclk   }]; ;# JB4
+set_property -dict { PACKAGE_PIN Y18  IOSTANDARD LVCMOS33 } [get_ports { oled_dc     }]; ;# JB7
+set_property -dict { PACKAGE_PIN Y19  IOSTANDARD LVCMOS33 } [get_ports { oled_res_n  }]; ;# JB8
+set_property -dict { PACKAGE_PIN W18  IOSTANDARD LVCMOS33 } [get_ports { oled_vbat_n }]; ;# JB9
+set_property -dict { PACKAGE_PIN W19  IOSTANDARD LVCMOS33 } [get_ports { oled_vdd_n  }]; ;# JB10
 
 # -----------------------------------------------------------------------------
 # Pmod JC top row (Pmod ALS, ADC081S021, 6-pin SPI)
 #   JC1=CS  JC3=MISO  JC4=SCK
+#
+#   Per the Zybo Rev B physical Pmod-pin -> FPGA-pin map:
+#     JC1=V15 JC2=W15 JC3=T11 JC4=T10
 # -----------------------------------------------------------------------------
-set_property -dict { PACKAGE_PIN V15  IOSTANDARD LVCMOS33 } [get_ports { als_cs_n }];     ;# JC1
-set_property -dict { PACKAGE_PIN T11  IOSTANDARD LVCMOS33 } [get_ports { als_miso }];     ;# JC3
-set_property -dict { PACKAGE_PIN T10  IOSTANDARD LVCMOS33 } [get_ports { als_sclk }];     ;# JC4
+set_property -dict { PACKAGE_PIN V15  IOSTANDARD LVCMOS33 } [get_ports { als_cs_n }];    ;# JC1
+set_property -dict { PACKAGE_PIN T11  IOSTANDARD LVCMOS33 } [get_ports { als_miso }];    ;# JC3
+set_property -dict { PACKAGE_PIN T10  IOSTANDARD LVCMOS33 } [get_ports { als_sclk }];    ;# JC4
 
 # -----------------------------------------------------------------------------
-# Pmod JC bottom row (Pmod MAXSONAR, PW mode)
-#   JC9 = PW input (pin 3 of the 6-pin Pmod plugged into bottom row)
+# Pmod JE top row (Pmod MAXSONAR, PW mode)
+#   PREVIOUSLY on JD top row (JD4=R14 / JD2=T15) but PW was reading stuck
+#   low even with the sensor plugged in and powered.  JD on the original
+#   Zybo Rev B is a *high-speed* Pmod with 0-ohm shunts in place of the
+#   normal protection resistors -- per the reference manual, "these Pmods
+#   offer no protection against short circuits", which is consistent with
+#   a pin or trace having been damaged at some point.
+#
+#   JE is the *standard* (logic-dedicated) Pmod with 200-ohm series
+#   protection resistors.  The MaxSonar PW signal is slow (147 us/inch,
+#   max ~38 ms pulse) so the series resistors do not affect timing, and
+#   the protection keeps JE robust against future mis-wiring.
+#
+#   Per the Digilent PmodMAXSONAR reference manual, J1 pinout is:
+#     Pmod pin 1=AN, 2=RX, 3=TX, 4=PWM (PW), 5=GND, 6=VCC.
+#   - PW (pulse-width output) is read on Pmod pin 4 = JE4 = H15.
+#   - RX (free-run enable) is *driven high* by the FPGA on Pmod pin 2
+#     = JE2 = W16.  Without an explicit driver, Vivado's default
+#     PULLDOWN on unconstrained pins fights the sensor's internal
+#     pull-up and the MB1010 stays in skip-ranging mode (PW stuck low).
+#
+#   Per the Zybo Rev B reference manual Table 9, JE physical pins:
+#     JE1=V12 JE2=W16 JE3=J15 JE4=H15
+#     JE7=V13 JE8=U17 JE9=T17 JE10=Y17
 # -----------------------------------------------------------------------------
-set_property -dict { PACKAGE_PIN T12  IOSTANDARD LVCMOS33 } [get_ports { sonar_pw }];     ;# JC9
+set_property -dict { PACKAGE_PIN H15  IOSTANDARD LVCMOS33 } [get_ports { sonar_pw }];    ;# JE4
+set_property -dict { PACKAGE_PIN W16  IOSTANDARD LVCMOS33 } [get_ports { sonar_rx }];    ;# JE2
 
 # -----------------------------------------------------------------------------
 # HDMI TX (source) on bank 35 - TMDS_33
@@ -59,31 +110,46 @@ set_property -dict { PACKAGE_PIN T12  IOSTANDARD LVCMOS33 } [get_ports { sonar_p
 #   D1_P=C20 / D1_N=B20
 #   D2_P=B19 / D2_N=A20
 #   CLK_P=H16 / CLK_N=H17
-#   HPD =E18 (input from sink, but we drive it to '1' on this design)
-#   CEC =E19, SCL=G17, SDA=G18 (left unconnected in this design)
+#   HPD = E18      (level-shifted from connector)
+#   OUT_EN = F17   (TPD12S016 enable -- MUST be driven HIGH)
 # -----------------------------------------------------------------------------
-set_property -dict { PACKAGE_PIN H16  IOSTANDARD TMDS_33 } [get_ports { hdmi_tx_clk_p }];
-set_property -dict { PACKAGE_PIN H17  IOSTANDARD TMDS_33 } [get_ports { hdmi_tx_clk_n }];
+set_property -dict { PACKAGE_PIN H16  IOSTANDARD TMDS_33 } [get_ports { hdmi_tx_clk_p  }];
+set_property -dict { PACKAGE_PIN H17  IOSTANDARD TMDS_33 } [get_ports { hdmi_tx_clk_n  }];
 set_property -dict { PACKAGE_PIN D19  IOSTANDARD TMDS_33 } [get_ports { hdmi_tx_d_p[0] }];
 set_property -dict { PACKAGE_PIN D20  IOSTANDARD TMDS_33 } [get_ports { hdmi_tx_d_n[0] }];
 set_property -dict { PACKAGE_PIN C20  IOSTANDARD TMDS_33 } [get_ports { hdmi_tx_d_p[1] }];
 set_property -dict { PACKAGE_PIN B20  IOSTANDARD TMDS_33 } [get_ports { hdmi_tx_d_n[1] }];
 set_property -dict { PACKAGE_PIN B19  IOSTANDARD TMDS_33 } [get_ports { hdmi_tx_d_p[2] }];
 set_property -dict { PACKAGE_PIN A20  IOSTANDARD TMDS_33 } [get_ports { hdmi_tx_d_n[2] }];
-set_property -dict { PACKAGE_PIN E18  IOSTANDARD LVCMOS33 } [get_ports { hdmi_tx_hpd  }];
+set_property -dict { PACKAGE_PIN E18  IOSTANDARD LVCMOS33 } [get_ports { hdmi_tx_hpd    }];
+set_property -dict { PACKAGE_PIN F17  IOSTANDARD LVCMOS33 } [get_ports { hdmi_tx_en     }];
 
 # -----------------------------------------------------------------------------
 # CDC / asynchronous-clock-group constraints
-#   The MMCM generates three clocks (clk_sys, clk_pixel, clk_serial).
-#   clk_sys and clk_pixel are asynchronous to one another from the
-#   point of view of timing analysis (the only crossings are slow-changing
-#   data through ASYNC_REG synchronisers).
+#   The MMCM generates three clocks:
+#     CLKOUT0 = clk_pixel  (25  MHz)
+#     CLKOUT1 = clk_serial (125 MHz, drives OSERDESE2 CLK)
+#     CLKOUT2 = clk_sys    (125 MHz, drives the rest of the design)
+#
+#   clk_pixel and clk_serial MUST remain synchronous: they are the CLKDIV /
+#   CLK pair feeding each OSERDESE2.  Only clk_sys is async vs. the HDMI
+#   pair; the only sys<->pixel crossings are slow-changing sensor values
+#   passed through 2-stage ASYNC_REG synchronisers in top_threat_system.vhd.
 # -----------------------------------------------------------------------------
-set_clock_groups -asynchronous \
-    -group [get_clocks -include_generated_clocks sys_clk_pin] \
-    -group [get_clocks -of_objects [get_pins -hierarchical -filter {NAME =~ */mmcm_i/CLKOUT0}]] \
-    -group [get_clocks -of_objects [get_pins -hierarchical -filter {NAME =~ */mmcm_i/CLKOUT1}]] \
-    -group [get_clocks -of_objects [get_pins -hierarchical -filter {NAME =~ */mmcm_i/CLKOUT2}]]
+set_clock_groups -name async_sys_hdmi -asynchronous \
+    -group [get_clocks -of_objects [get_pins -hierarchical -filter {NAME =~ */mmcm_i/CLKOUT2}]] \
+    -group [get_clocks -of_objects [get_pins -hierarchical -filter {NAME =~ */mmcm_i/CLKOUT0}]]
+
+set_clock_groups -name async_sys_serial -asynchronous \
+    -group [get_clocks -of_objects [get_pins -hierarchical -filter {NAME =~ */mmcm_i/CLKOUT2}]] \
+    -group [get_clocks -of_objects [get_pins -hierarchical -filter {NAME =~ */mmcm_i/CLKOUT1}]]
+
+# MMCM lock output is consumed asynchronously as a power-on reset; the
+# per-domain synchronisers handle the recovery, so don't time the path.
+set_false_path -from [get_pins -hierarchical -filter {NAME =~ */mmcm_i/LOCKED}]
+
+# `hdmi_tx_en` is a static '1' driving the on-board level-shifter enable.
+set_false_path -to [get_ports hdmi_tx_en]
 
 # -----------------------------------------------------------------------------
 # Configuration

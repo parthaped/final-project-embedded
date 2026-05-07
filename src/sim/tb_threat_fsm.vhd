@@ -1,7 +1,17 @@
 -- ============================================================================
 -- tb_threat_fsm.vhd
---   Walks the FSM through every transition shown in the slide and asserts
---   the resulting state codes.
+--   Walks the reworked perimeter-monitor FSM through every transition
+--   in the new state diagram and asserts the resulting state codes,
+--   log_pulse, and cooldown_active outputs.
+--
+--   New states (encoded into state_code 2:0):
+--       000=IDLE  001=MONITOR  010=CANDIDATE  011=VERIFY
+--       100=CONTACT  101=COOLDOWN
+--
+--   Severity is no longer produced by the FSM; the contact_log captures
+--   `severity_now` directly when log_pulse fires.  This testbench just
+--   confirms the FSM emits log_pulse for one cycle in S_CONTACT and
+--   then returns to MONITOR after cooldown.
 -- ============================================================================
 
 library ieee;
@@ -13,41 +23,45 @@ end entity;
 
 architecture sim of tb_threat_fsm is
     constant CLK_PERIOD : time := 10 ns;
-    constant T_LIM      : positive := 8;        -- short dwell for sim
+    constant T_LIM      : positive := 8;
+    constant T_COOL     : positive := 12;
 
-    signal clk          : std_logic := '0';
-    signal rst          : std_logic := '1';
-    signal start        : std_logic := '0';
-    signal reset_btn    : std_logic := '0';
-    signal trig         : std_logic := '0';
-    signal ok           : std_logic := '0';
-    signal conf         : std_logic := '0';
-    signal state_code   : std_logic_vector(2 downto 0);
-    signal alert_active : std_logic;
-    signal severity     : std_logic_vector(1 downto 0);
+    signal clk             : std_logic := '0';
+    signal rst             : std_logic := '1';
+    signal start           : std_logic := '0';
+    signal reset_btn       : std_logic := '0';
+    signal arm             : std_logic := '1';
+    signal trig            : std_logic := '0';
+
+    signal state_code      : std_logic_vector(2 downto 0);
+    signal log_pulse       : std_logic;
+    signal cooldown_active : std_logic;
+    signal clear_log       : std_logic;
 
     constant C_IDLE      : std_logic_vector(2 downto 0) := "000";
     constant C_MONITOR   : std_logic_vector(2 downto 0) := "001";
     constant C_CANDIDATE : std_logic_vector(2 downto 0) := "010";
     constant C_VERIFY    : std_logic_vector(2 downto 0) := "011";
-    constant C_ALERT     : std_logic_vector(2 downto 0) := "100";
-    constant C_CLASSIFY  : std_logic_vector(2 downto 0) := "101";
+    constant C_CONTACT   : std_logic_vector(2 downto 0) := "100";
+    constant C_COOLDOWN  : std_logic_vector(2 downto 0) := "101";
 begin
     clk <= not clk after CLK_PERIOD/2;
 
     dut : entity work.threat_fsm
-        generic map ( T_LIMIT_CYCLES => T_LIM )
+        generic map (
+            T_LIMIT_CYCLES    => T_LIM,
+            T_COOLDOWN_CYCLES => T_COOL )
         port map (
-            clk          => clk,
-            rst          => rst,
-            start        => start,
-            reset_btn    => reset_btn,
-            trig         => trig,
-            ok           => ok,
-            conf         => conf,
-            state_code   => state_code,
-            alert_active => alert_active,
-            severity     => severity );
+            clk             => clk,
+            rst             => rst,
+            start           => start,
+            reset_btn       => reset_btn,
+            arm             => arm,
+            trig            => trig,
+            state_code      => state_code,
+            log_pulse       => log_pulse,
+            cooldown_active => cooldown_active,
+            clear_log       => clear_log );
 
     main : process
         procedure tick(n : integer := 1) is
@@ -65,14 +79,16 @@ begin
                        " got "      & to_string(state_code)
                 severity failure;
         end procedure;
+
+        variable log_count : integer := 0;
     begin
         rst <= '1'; tick(5);
         rst <= '0'; tick(2);
         check_state(C_IDLE, "after-reset");
 
         ----------------------------------------------------------------
-        -- Path A:  Idle -> Monitor -> Candidate -> Verify -> Alert (conf)
-        --                                         -> Monitor (reset)
+        -- Path A:  Idle -> Monitor -> Candidate -> Verify -> Contact ->
+        --          Cooldown -> Monitor (full happy path)
         ----------------------------------------------------------------
         start <= '1'; tick; start <= '0'; tick;
         check_state(C_MONITOR, "Idle->Monitor");
@@ -83,68 +99,68 @@ begin
         tick(T_LIM + 2);
         check_state(C_VERIFY, "Candidate->Verify (T)");
 
-        -- Single-sensor confirm: conf=1, ok=0
-        conf <= '1'; ok <= '0'; tick(2);
-        check_state(C_ALERT, "Verify->Alert (conf)");
-        assert alert_active = '1' report "alert_active should be '1' in ALERT" severity failure;
+        -- trig still high through verify -> Contact
+        tick(T_LIM + 2);
+        check_state(C_CONTACT, "Verify->Contact (trig held)");
 
-        conf <= '0';
-        reset_btn <= '1'; tick; reset_btn <= '0'; tick;
-        check_state(C_MONITOR, "Alert->Monitor (reset)");
+        -- log_pulse must be high in S_CONTACT for exactly one cycle.
+        assert log_pulse = '1'
+            report "log_pulse should be '1' in S_CONTACT" severity failure;
+
+        tick;
+        check_state(C_COOLDOWN, "Contact->Cooldown (1 cycle)");
+        assert log_pulse = '0'
+            report "log_pulse should drop after S_CONTACT" severity failure;
+        assert cooldown_active = '1'
+            report "cooldown_active should be '1' in COOLDOWN" severity failure;
+
+        -- During cooldown trig must NOT cause a re-trigger.
+        trig <= '1';
+        tick(T_COOL);
+        check_state(C_COOLDOWN, "Cooldown holds against re-trigger");
+
+        trig <= '0';
+        tick(3);
+        check_state(C_MONITOR, "Cooldown->Monitor (T_cool)");
 
         ----------------------------------------------------------------
-        -- Path B:  Monitor -> Candidate -> Verify -> Classify -> Alert (sev)
+        -- Path B:  Verify timeout fallback (glitch).  trig drops before
+        -- Verify completes -> back to Monitor without logging.
         ----------------------------------------------------------------
         trig <= '1'; tick(2);
         check_state(C_CANDIDATE, "Monitor->Candidate (B)");
+
         tick(T_LIM + 2);
         check_state(C_VERIFY, "Candidate->Verify (B)");
 
-        ok <= '1'; tick(2);
-        check_state(C_CLASSIFY, "Verify->Classify (ok)");
-        ok <= '0';
-
-        tick(T_LIM + 2);
-        check_state(C_ALERT, "Classify->Alert (sev)");
-        assert severity = "01"
-            report "expected severity=01 after classify, got " & to_string(severity)
-            severity failure;
-
-        reset_btn <= '1'; tick; reset_btn <= '0'; tick;
-        check_state(C_MONITOR, "Alert->Monitor (reset, B)");
-
-        -- After Alert->Monitor reset, severity must be cleared so a stale
-        -- value cannot leak into a future read.
-        assert severity = "00"
-            report "expected severity=00 after Alert->Monitor reset, got " &
-                   to_string(severity)
-            severity failure;
+        -- Trig drops; Verify must fall back to Monitor immediately.
+        trig <= '0'; tick(2);
+        check_state(C_MONITOR, "Verify->Monitor (glitch)");
 
         ----------------------------------------------------------------
-        -- Path C: Monitor self-loop on no-trig
-        ----------------------------------------------------------------
-        trig <= '0'; tick(20);
-        check_state(C_MONITOR, "Monitor self-loop (no-trig)");
-
-        ----------------------------------------------------------------
-        -- Path D: Verify timeout fallback.  Brief trig glitch enters
-        -- Candidate; by the time we reach Verify the sensors have
-        -- returned to safe band (ok=conf=0).  The FSM must time out and
-        -- return to Monitor instead of deadlocking in Verify.
+        -- Path C:  reset_btn from any state -> Monitor + clear_log pulse.
         ----------------------------------------------------------------
         trig <= '1'; tick(2);
-        check_state(C_CANDIDATE, "Monitor->Candidate (D)");
+        check_state(C_CANDIDATE, "Monitor->Candidate (C)");
 
-        -- Drop trig immediately; ok and conf stay '0'.
-        trig <= '0'; ok <= '0'; conf <= '0';
+        reset_btn <= '1'; tick;
+        assert clear_log = '1'
+            report "clear_log should track reset_btn" severity failure;
+        reset_btn <= '0'; tick;
+        check_state(C_MONITOR, "reset_btn -> Monitor");
 
-        tick(T_LIM + 2);
-        check_state(C_VERIFY, "Candidate->Verify (D)");
+        ----------------------------------------------------------------
+        -- Path D:  arm low force-holds IDLE.
+        ----------------------------------------------------------------
+        trig <= '0';
+        arm <= '0'; tick(3);
+        check_state(C_IDLE, "arm=0 -> IDLE");
 
-        -- Now wait for the Verify dwell to expire.  Without the timeout
-        -- fix the FSM would sit here forever.
-        tick(T_LIM + 2);
-        check_state(C_MONITOR, "Verify->Monitor (timeout, D)");
+        arm <= '1'; tick(2);
+        check_state(C_IDLE, "arm restored, still IDLE");
+
+        start <= '1'; tick; start <= '0'; tick(2);
+        check_state(C_MONITOR, "Idle->Monitor (after re-arm)");
 
         report "tb_threat_fsm PASSED" severity note;
         std.env.finish;
