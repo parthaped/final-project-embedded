@@ -42,15 +42,16 @@ architecture rtl of strip_chart_renderer is
     constant LGT_BOT : integer := 159;
     constant LGT_H   : integer := LGT_BOT - LGT_TOP;
 
+    constant TRACE_HT : integer := 2;
+
     signal x_s1, y_s1 : integer range 0 to 1023 := 0;
     signal h_range_s1, h_als_s1 : unsigned(7 downto 0) := (others => '0');
-    -- One-cycle-delayed copies of the per-column history samples so we
-    -- can connect column X's trace to column X-1's with a vertical
-    -- riser. Without these the per-column 2 px segments do not overlap
-    -- when consecutive samples differ in y, and the trace shows up as
-    -- a broken dotted line.
+   
     signal h_range_prev_s1      : unsigned(7 downto 0) := (others => '0');
     signal h_als_prev_s1        : unsigned(7 downto 0) := (others => '0');
+   
+    signal h_range_held         : unsigned(7 downto 0) := (others => '0');
+    signal h_als_held           : unsigned(7 downto 0) := (others => '0');
     signal h_amb_s1, h_sev_s1   : unsigned(1 downto 0) := (others => '0');
     signal h_event_s1           : std_logic := '0';
     signal near_s1, warn_s1     : unsigned(7 downto 0) := (others => '0');
@@ -142,8 +143,10 @@ begin
                 x_s1 <= 0; y_s1 <= 0;
                 h_range_s1      <= (others => '0');
                 h_range_prev_s1 <= (others => '0');
+                h_range_held    <= (others => '0');
                 h_als_s1        <= (others => '0');
                 h_als_prev_s1   <= (others => '0');
+                h_als_held      <= (others => '0');
                 h_amb_s1   <= (others => '0');
                 h_sev_s1   <= (others => '0');
                 h_event_s1 <= '0';
@@ -156,6 +159,12 @@ begin
                 h_range_prev_s1 <= h_range_s1;
                 h_als_s1        <= h_als;
                 h_als_prev_s1   <= h_als_s1;
+                if h_range /= to_unsigned(0, h_range'length) then
+                    h_range_held <= h_range;
+                end if;
+                if h_als /= to_unsigned(0, h_als'length) then
+                    h_als_held <= h_als;
+                end if;
                 h_amb_s1   <= h_ambient;
                 h_sev_s1   <= h_severity;
                 h_event_s1 <= h_event;
@@ -167,6 +176,10 @@ begin
 
     process(clk_pixel)
         variable px, py    : integer;
+        variable r_eff     : unsigned(7 downto 0);
+        variable r_eff_prev: unsigned(7 downto 0);
+        variable a_eff     : unsigned(7 downto 0);
+        variable a_eff_prev: unsigned(7 downto 0);
         variable y_rng     : integer;
         variable y_rng_prev: integer;
         variable y_rng_top, y_rng_bot : integer;
@@ -198,53 +211,81 @@ begin
                 in_top := (py >= RNG_TOP) and (py <= RNG_BOT);
                 in_bot := (py >= LGT_TOP) and (py <= LGT_BOT);
 
-                y_rng      := range_to_y(h_range_s1);
-                y_rng_prev := range_to_y(h_range_prev_s1);
-                y_als      := als_to_y(h_als_s1);
-                y_als_prev := als_to_y(h_als_prev_s1);
+                -- Substitute the held "last non-zero" sample for any
+                -- 0-valued column so isolated dropouts in the history
+                -- buffer don't break the trace.
+                if to_integer(h_range_s1) /= 0 then
+                    r_eff := h_range_s1;
+                else
+                    r_eff := h_range_held;
+                end if;
+                if to_integer(h_range_prev_s1) /= 0 then
+                    r_eff_prev := h_range_prev_s1;
+                else
+                    r_eff_prev := h_range_held;
+                end if;
+                if to_integer(h_als_s1) /= 0 then
+                    a_eff := h_als_s1;
+                else
+                    a_eff := h_als_held;
+                end if;
+                if to_integer(h_als_prev_s1) /= 0 then
+                    a_eff_prev := h_als_prev_s1;
+                else
+                    a_eff_prev := h_als_held;
+                end if;
+
+                y_rng      := range_to_y(r_eff);
+                y_rng_prev := range_to_y(r_eff_prev);
+                y_als      := als_to_y(a_eff);
+                y_als_prev := als_to_y(a_eff_prev);
                 y_near := range_to_y(resize(near_s1, 8));
                 y_warn := range_to_y(resize(warn_s1, 8));
 
                 -- Connect this column's sample to the previous column
-                -- with a vertical riser, unless we're at the very left
-                -- edge of the panel (where the "previous" register
+                -- with a vertical riser. Suppressed only at the very
+                -- left edge of the panel where the "previous" register
                 -- holds a sample latched during horizontal blanking
-                -- from a non-adjacent column) or the previous sample
-                -- was a 0-flagged "no reading" entry.
-                connect_r := (px > 0) and
-                             (to_integer(h_range_prev_s1) /= 0) and
-                             (to_integer(h_range_s1)      /= 0);
+                -- from a non-adjacent column; everywhere else we want
+                -- the riser even if one side fell back to the held
+                -- value, so the trace stays continuous.
+                connect_r := (px > 0);
                 connect_l := (px > 0);
 
                 if connect_r then
                     if y_rng <= y_rng_prev then
-                        y_rng_top := y_rng      - 1;
-                        y_rng_bot := y_rng_prev + 1;
+                        y_rng_top := y_rng      - TRACE_HT;
+                        y_rng_bot := y_rng_prev + TRACE_HT;
                     else
-                        y_rng_top := y_rng_prev - 1;
-                        y_rng_bot := y_rng      + 1;
+                        y_rng_top := y_rng_prev - TRACE_HT;
+                        y_rng_bot := y_rng      + TRACE_HT;
                     end if;
                 else
-                    y_rng_top := y_rng - 1;
-                    y_rng_bot := y_rng + 1;
+                    y_rng_top := y_rng - TRACE_HT;
+                    y_rng_bot := y_rng + TRACE_HT;
                 end if;
 
                 if connect_l then
                     if y_als <= y_als_prev then
-                        y_als_top := y_als      - 1;
-                        y_als_bot := y_als_prev + 1;
+                        y_als_top := y_als      - TRACE_HT;
+                        y_als_bot := y_als_prev + TRACE_HT;
                     else
-                        y_als_top := y_als_prev - 1;
-                        y_als_bot := y_als      + 1;
+                        y_als_top := y_als_prev - TRACE_HT;
+                        y_als_bot := y_als      + TRACE_HT;
                     end if;
                 else
-                    y_als_top := y_als - 1;
-                    y_als_bot := y_als + 1;
+                    y_als_top := y_als - TRACE_HT;
+                    y_als_bot := y_als + TRACE_HT;
                 end if;
 
+                -- Only suppress the trace when the held register is
+                -- also still 0, i.e. no valid sample has been seen
+                -- since boot. After the first ~10 s the held register
+                -- is always non-zero so the check below stays out of
+                -- the way.
                 on_trace_r := in_top and
                               (py >= y_rng_top) and (py <= y_rng_bot) and
-                              (to_integer(h_range_s1) /= 0);
+                              (to_integer(r_eff) /= 0);
                 on_trace_l := in_bot and
                               (py >= y_als_top) and (py <= y_als_bot);
 
