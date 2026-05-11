@@ -46,10 +46,28 @@ architecture rtl of strip_chart_renderer is
 
     signal x_s1, y_s1 : integer range 0 to 1023 := 0;
     signal h_range_s1, h_als_s1 : unsigned(7 downto 0) := (others => '0');
-   
+    -- Shift register of the last five history samples seen by the
+    -- rasterizer. Two purposes:
+    --  1. Adjacent prev_s1 is used to connect column X's trace to
+    --     column X-1's with a vertical riser, so the per-column thin
+    --     segments don't show as a broken dotted line when consecutive
+    --     samples disagree in y.
+    --  2. The first four (s1, prev_s1, prev2_s1, prev3_s1) and the
+    --     last four (prev_s1..prev4_s1) are averaged below into a
+    --     display-side 4-tap FIR so the trace doesn't bounce around
+    --     by ~1 pixel per column from the sonar's natural PW
+    --     quantization noise. The data path (presence detection,
+    --     threshold, contact log) is unaffected -- this filter only
+    --     touches what is drawn on the strip chart.
     signal h_range_prev_s1      : unsigned(7 downto 0) := (others => '0');
+    signal h_range_prev2_s1     : unsigned(7 downto 0) := (others => '0');
+    signal h_range_prev3_s1     : unsigned(7 downto 0) := (others => '0');
+    signal h_range_prev4_s1     : unsigned(7 downto 0) := (others => '0');
     signal h_als_prev_s1        : unsigned(7 downto 0) := (others => '0');
-   
+    signal h_als_prev2_s1       : unsigned(7 downto 0) := (others => '0');
+    signal h_als_prev3_s1       : unsigned(7 downto 0) := (others => '0');
+    signal h_als_prev4_s1       : unsigned(7 downto 0) := (others => '0');
+
     signal h_range_held         : unsigned(7 downto 0) := (others => '0');
     signal h_als_held           : unsigned(7 downto 0) := (others => '0');
     signal h_amb_s1, h_sev_s1   : unsigned(1 downto 0) := (others => '0');
@@ -141,24 +159,36 @@ begin
         if rising_edge(clk_pixel) then
             if rst = '1' then
                 x_s1 <= 0; y_s1 <= 0;
-                h_range_s1      <= (others => '0');
-                h_range_prev_s1 <= (others => '0');
-                h_range_held    <= (others => '0');
-                h_als_s1        <= (others => '0');
-                h_als_prev_s1   <= (others => '0');
-                h_als_held      <= (others => '0');
+                h_range_s1       <= (others => '0');
+                h_range_prev_s1  <= (others => '0');
+                h_range_prev2_s1 <= (others => '0');
+                h_range_prev3_s1 <= (others => '0');
+                h_range_prev4_s1 <= (others => '0');
+                h_range_held     <= (others => '0');
+                h_als_s1         <= (others => '0');
+                h_als_prev_s1    <= (others => '0');
+                h_als_prev2_s1   <= (others => '0');
+                h_als_prev3_s1   <= (others => '0');
+                h_als_prev4_s1   <= (others => '0');
+                h_als_held       <= (others => '0');
                 h_amb_s1   <= (others => '0');
                 h_sev_s1   <= (others => '0');
                 h_event_s1 <= '0';
                 near_s1    <= (others => '0');
                 warn_s1    <= (others => '0');
             else
-                x_s1            <= to_integer(x_in);
-                y_s1            <= to_integer(y_in);
-                h_range_s1      <= h_range;
-                h_range_prev_s1 <= h_range_s1;
-                h_als_s1        <= h_als;
-                h_als_prev_s1   <= h_als_s1;
+                x_s1             <= to_integer(x_in);
+                y_s1             <= to_integer(y_in);
+                h_range_s1       <= h_range;
+                h_range_prev_s1  <= h_range_s1;
+                h_range_prev2_s1 <= h_range_prev_s1;
+                h_range_prev3_s1 <= h_range_prev2_s1;
+                h_range_prev4_s1 <= h_range_prev3_s1;
+                h_als_s1         <= h_als;
+                h_als_prev_s1    <= h_als_s1;
+                h_als_prev2_s1   <= h_als_prev_s1;
+                h_als_prev3_s1   <= h_als_prev2_s1;
+                h_als_prev4_s1   <= h_als_prev3_s1;
                 if h_range /= to_unsigned(0, h_range'length) then
                     h_range_held <= h_range;
                 end if;
@@ -176,10 +206,12 @@ begin
 
     process(clk_pixel)
         variable px, py    : integer;
-        variable r_eff     : unsigned(7 downto 0);
-        variable r_eff_prev: unsigned(7 downto 0);
-        variable a_eff     : unsigned(7 downto 0);
-        variable a_eff_prev: unsigned(7 downto 0);
+        variable r0, r1, r2, r3, r4 : unsigned(7 downto 0);
+        variable a0, a1, a2, a3, a4 : unsigned(7 downto 0);
+        variable r_sum_curr, r_sum_prev : unsigned(9 downto 0);
+        variable a_sum_curr, a_sum_prev : unsigned(9 downto 0);
+        variable r_avg_curr, r_avg_prev : unsigned(7 downto 0);
+        variable a_avg_curr, a_avg_prev : unsigned(7 downto 0);
         variable y_rng     : integer;
         variable y_rng_prev: integer;
         variable y_rng_top, y_rng_bot : integer;
@@ -211,34 +243,38 @@ begin
                 in_top := (py >= RNG_TOP) and (py <= RNG_BOT);
                 in_bot := (py >= LGT_TOP) and (py <= LGT_BOT);
 
-                -- Substitute the held "last non-zero" sample for any
-                -- 0-valued column so isolated dropouts in the history
-                -- buffer don't break the trace.
-                if to_integer(h_range_s1) /= 0 then
-                    r_eff := h_range_s1;
-                else
-                    r_eff := h_range_held;
-                end if;
-                if to_integer(h_range_prev_s1) /= 0 then
-                    r_eff_prev := h_range_prev_s1;
-                else
-                    r_eff_prev := h_range_held;
-                end if;
-                if to_integer(h_als_s1) /= 0 then
-                    a_eff := h_als_s1;
-                else
-                    a_eff := h_als_held;
-                end if;
-                if to_integer(h_als_prev_s1) /= 0 then
-                    a_eff_prev := h_als_prev_s1;
-                else
-                    a_eff_prev := h_als_held;
-                end if;
+                -- Per-tap held substitution: any 0-valued slot in the
+                -- shift register is replaced with the most recent
+                -- valid sample, so a one-off dropout doesn't drag the
+                -- 4-tap average down.
+                if to_integer(h_range_s1)       /= 0 then r0 := h_range_s1;       else r0 := h_range_held; end if;
+                if to_integer(h_range_prev_s1)  /= 0 then r1 := h_range_prev_s1;  else r1 := h_range_held; end if;
+                if to_integer(h_range_prev2_s1) /= 0 then r2 := h_range_prev2_s1; else r2 := h_range_held; end if;
+                if to_integer(h_range_prev3_s1) /= 0 then r3 := h_range_prev3_s1; else r3 := h_range_held; end if;
+                if to_integer(h_range_prev4_s1) /= 0 then r4 := h_range_prev4_s1; else r4 := h_range_held; end if;
+                if to_integer(h_als_s1)         /= 0 then a0 := h_als_s1;         else a0 := h_als_held;   end if;
+                if to_integer(h_als_prev_s1)    /= 0 then a1 := h_als_prev_s1;    else a1 := h_als_held;   end if;
+                if to_integer(h_als_prev2_s1)   /= 0 then a2 := h_als_prev2_s1;   else a2 := h_als_held;   end if;
+                if to_integer(h_als_prev3_s1)   /= 0 then a3 := h_als_prev3_s1;   else a3 := h_als_held;   end if;
+                if to_integer(h_als_prev4_s1)   /= 0 then a4 := h_als_prev4_s1;   else a4 := h_als_held;   end if;
 
-                y_rng      := range_to_y(r_eff);
-                y_rng_prev := range_to_y(r_eff_prev);
-                y_als      := als_to_y(a_eff);
-                y_als_prev := als_to_y(a_eff_prev);
+                -- 4-tap moving average. curr is centered on column X,
+                -- prev is centered on column X-1, so the connector
+                -- riser below still joins truly adjacent samples.
+                r_sum_curr := resize(r0, 10) + resize(r1, 10) + resize(r2, 10) + resize(r3, 10);
+                r_sum_prev := resize(r1, 10) + resize(r2, 10) + resize(r3, 10) + resize(r4, 10);
+                a_sum_curr := resize(a0, 10) + resize(a1, 10) + resize(a2, 10) + resize(a3, 10);
+                a_sum_prev := resize(a1, 10) + resize(a2, 10) + resize(a3, 10) + resize(a4, 10);
+
+                r_avg_curr := r_sum_curr(9 downto 2);
+                r_avg_prev := r_sum_prev(9 downto 2);
+                a_avg_curr := a_sum_curr(9 downto 2);
+                a_avg_prev := a_sum_prev(9 downto 2);
+
+                y_rng      := range_to_y(r_avg_curr);
+                y_rng_prev := range_to_y(r_avg_prev);
+                y_als      := als_to_y(a_avg_curr);
+                y_als_prev := als_to_y(a_avg_prev);
                 y_near := range_to_y(resize(near_s1, 8));
                 y_warn := range_to_y(resize(warn_s1, 8));
 
@@ -281,11 +317,11 @@ begin
                 -- Only suppress the trace when the held register is
                 -- also still 0, i.e. no valid sample has been seen
                 -- since boot. After the first ~10 s the held register
-                -- is always non-zero so the check below stays out of
-                -- the way.
+                -- is always non-zero so the averaged value is too,
+                -- and the check below stays out of the way.
                 on_trace_r := in_top and
                               (py >= y_rng_top) and (py <= y_rng_bot) and
-                              (to_integer(r_eff) /= 0);
+                              (to_integer(r_avg_curr) /= 0);
                 on_trace_l := in_bot and
                               (py >= y_als_top) and (py <= y_als_bot);
 
