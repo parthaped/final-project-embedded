@@ -1,14 +1,3 @@
--- strip_chart_renderer.vhd
---   Dual-trace 10 s history strip chart. The 640x160 panel is split:
---     y=  0..79  RANGE trace. Background is a three-band gradient
---                (red ALERT, amber WARN, green SAFE) whose splits
---                follow the live near_th / warn_th, so the bands
---                visibly slide when SW1 is toggled.
---     y= 80..159 LIGHT trace. Background is the ambient mode the
---                sample was taken in (NIGHT/DIM/DAY/BRIGHT colours).
---   Foreground traces are 2 px thick. A vertical "event tick" coloured
---   by severity lights up any column that had a contact.
-
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -55,6 +44,13 @@ architecture rtl of strip_chart_renderer is
 
     signal x_s1, y_s1 : integer range 0 to 1023 := 0;
     signal h_range_s1, h_als_s1 : unsigned(7 downto 0) := (others => '0');
+    -- One-cycle-delayed copies of the per-column history samples so we
+    -- can connect column X's trace to column X-1's with a vertical
+    -- riser. Without these the per-column 2 px segments do not overlap
+    -- when consecutive samples differ in y, and the trace shows up as
+    -- a broken dotted line.
+    signal h_range_prev_s1      : unsigned(7 downto 0) := (others => '0');
+    signal h_als_prev_s1        : unsigned(7 downto 0) := (others => '0');
     signal h_amb_s1, h_sev_s1   : unsigned(1 downto 0) := (others => '0');
     signal h_event_s1           : std_logic := '0';
     signal near_s1, warn_s1     : unsigned(7 downto 0) := (others => '0');
@@ -144,18 +140,22 @@ begin
         if rising_edge(clk_pixel) then
             if rst = '1' then
                 x_s1 <= 0; y_s1 <= 0;
-                h_range_s1 <= (others => '0');
-                h_als_s1   <= (others => '0');
+                h_range_s1      <= (others => '0');
+                h_range_prev_s1 <= (others => '0');
+                h_als_s1        <= (others => '0');
+                h_als_prev_s1   <= (others => '0');
                 h_amb_s1   <= (others => '0');
                 h_sev_s1   <= (others => '0');
                 h_event_s1 <= '0';
                 near_s1    <= (others => '0');
                 warn_s1    <= (others => '0');
             else
-                x_s1       <= to_integer(x_in);
-                y_s1       <= to_integer(y_in);
-                h_range_s1 <= h_range;
-                h_als_s1   <= h_als;
+                x_s1            <= to_integer(x_in);
+                y_s1            <= to_integer(y_in);
+                h_range_s1      <= h_range;
+                h_range_prev_s1 <= h_range_s1;
+                h_als_s1        <= h_als;
+                h_als_prev_s1   <= h_als_s1;
                 h_amb_s1   <= h_ambient;
                 h_sev_s1   <= h_severity;
                 h_event_s1 <= h_event;
@@ -168,9 +168,15 @@ begin
     process(clk_pixel)
         variable px, py    : integer;
         variable y_rng     : integer;
+        variable y_rng_prev: integer;
+        variable y_rng_top, y_rng_bot : integer;
         variable y_als     : integer;
+        variable y_als_prev: integer;
+        variable y_als_top, y_als_bot : integer;
         variable y_near    : integer;
         variable y_warn    : integer;
+        variable connect_r : boolean;
+        variable connect_l : boolean;
         variable in_top    : boolean;
         variable in_bot    : boolean;
         variable on_trace_r: boolean;
@@ -192,16 +198,55 @@ begin
                 in_top := (py >= RNG_TOP) and (py <= RNG_BOT);
                 in_bot := (py >= LGT_TOP) and (py <= LGT_BOT);
 
-                y_rng  := range_to_y(h_range_s1);
-                y_als  := als_to_y(h_als_s1);
+                y_rng      := range_to_y(h_range_s1);
+                y_rng_prev := range_to_y(h_range_prev_s1);
+                y_als      := als_to_y(h_als_s1);
+                y_als_prev := als_to_y(h_als_prev_s1);
                 y_near := range_to_y(resize(near_s1, 8));
                 y_warn := range_to_y(resize(warn_s1, 8));
 
+                -- Connect this column's sample to the previous column
+                -- with a vertical riser, unless we're at the very left
+                -- edge of the panel (where the "previous" register
+                -- holds a sample latched during horizontal blanking
+                -- from a non-adjacent column) or the previous sample
+                -- was a 0-flagged "no reading" entry.
+                connect_r := (px > 0) and
+                             (to_integer(h_range_prev_s1) /= 0) and
+                             (to_integer(h_range_s1)      /= 0);
+                connect_l := (px > 0);
+
+                if connect_r then
+                    if y_rng <= y_rng_prev then
+                        y_rng_top := y_rng      - 1;
+                        y_rng_bot := y_rng_prev + 1;
+                    else
+                        y_rng_top := y_rng_prev - 1;
+                        y_rng_bot := y_rng      + 1;
+                    end if;
+                else
+                    y_rng_top := y_rng - 1;
+                    y_rng_bot := y_rng + 1;
+                end if;
+
+                if connect_l then
+                    if y_als <= y_als_prev then
+                        y_als_top := y_als      - 1;
+                        y_als_bot := y_als_prev + 1;
+                    else
+                        y_als_top := y_als_prev - 1;
+                        y_als_bot := y_als      + 1;
+                    end if;
+                else
+                    y_als_top := y_als - 1;
+                    y_als_bot := y_als + 1;
+                end if;
+
                 on_trace_r := in_top and
-                              (py >= y_rng - 1) and (py <= y_rng + 1) and
+                              (py >= y_rng_top) and (py <= y_rng_bot) and
                               (to_integer(h_range_s1) /= 0);
                 on_trace_l := in_bot and
-                              (py >= y_als - 1) and (py <= y_als + 1);
+                              (py >= y_als_top) and (py <= y_als_bot);
 
                 on_event := (h_event_s1 = '1');
 
