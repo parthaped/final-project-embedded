@@ -1,19 +1,13 @@
--- ============================================================================
 -- tmds_encoder.vhd
---   Standard DVI 8b/10b TMDS encoder for one channel.  Combinational path
---   feeds a registered output `q_out`.  Per-channel DC-balance counter
---   (`bias`) is also registered.
+--   8b/10b TMDS encoder for one DVI/HDMI colour channel.
+--   ref: DVI 1.0 specification section 3.2.2 (transition-minimised then
+--        DC-balanced); fpga4fun.com "HDMI from VGA RGB" walkthrough was
+--        the readable version I worked from.
 --
---   Reference: DVI 1.0 Spec section 3.2.2.
---
---   Inputs:
---     d         8-bit pixel value (RGB component)
---     c0, c1    control bits used during blanking; D0 channel: c0=hsync, c1=vsync.
---               D1 and D2 channels tie c0=c1='0'.
---     de        active-video flag (high during pixels)
---   Output:
---     q_out     10-bit TMDS symbol, q_out(0) is sent first on the wire.
--- ============================================================================
+--   For active video we minimise transitions (XOR or XNOR the byte into
+--   q_m), then pick whether to invert q_m so the running DC bias stays
+--   near zero. During blanking we send one of four fixed control
+--   symbols, where the D0 (Blue) channel carries hsync/vsync as c0/c1.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -33,7 +27,6 @@ end entity;
 
 architecture rtl of tmds_encoder is
 
-    -- Population count helper.
     function popcount8 (v : std_logic_vector(7 downto 0)) return integer is
         variable n : integer := 0;
     begin
@@ -43,7 +36,6 @@ architecture rtl of tmds_encoder is
         return n;
     end function;
 
-    -- Bias counter is signed (-15..+15 worst case is plenty).
     signal bias  : signed(4 downto 0) := (others => '0');
     signal q_r   : std_logic_vector(9 downto 0) := (others => '0');
 
@@ -55,7 +47,7 @@ begin
         variable use_xnor   : boolean;
         variable q_m        : std_logic_vector(8 downto 0);
         variable n1q, n0q   : integer range 0 to 8;
-        variable diff_qm    : signed(4 downto 0);     -- N1q - N0q
+        variable diff_qm    : signed(4 downto 0);
         variable q_o        : std_logic_vector(9 downto 0);
         variable b          : signed(4 downto 0);
     begin
@@ -65,7 +57,6 @@ begin
                 q_r  <= (others => '0');
             else
                 if de = '0' then
-                    -- Control symbols.
                     case std_logic_vector'(c1 & c0) is
                         when "00"   => q_o := "1101010100";
                         when "01"   => q_o := "0010101011";

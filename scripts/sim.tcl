@@ -16,8 +16,9 @@ set rtl_files {
     ../../src/rtl/hdmi/font_render_pkg.vhd
 
     ../../src/rtl/common/synchronizer.vhd
+    ../../src/rtl/common/synchronizer_rst.vhd
     ../../src/rtl/common/debouncer.vhd
-    ../../src/rtl/common/pulse_gen.vhd
+    ../../src/rtl/common/clock_div.vhd
     ../../src/rtl/common/moving_average8.vhd
     ../../src/rtl/common/system_clock.vhd
 
@@ -51,7 +52,7 @@ set rtl_files {
 set tb_files {
     ../../src/sim/tb_synchronizer.vhd
     ../../src/sim/tb_debouncer.vhd
-    ../../src/sim/tb_pulse_gen.vhd
+    ../../src/sim/tb_clock_div.vhd
     ../../src/sim/tb_moving_average8.vhd
     ../../src/sim/tb_threshold_detect.vhd
     ../../src/sim/tb_pmod_als_spi.vhd

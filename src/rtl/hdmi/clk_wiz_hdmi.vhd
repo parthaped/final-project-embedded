@@ -1,20 +1,21 @@
--- ============================================================================
 -- clk_wiz_hdmi.vhd
---   Wraps an MMCME2_BASE primitive that takes the on-board 125 MHz sysclk
---   and produces:
---     clk_sys     - 125 MHz, BUFG'd, drives the rest of the design
---     clk_pixel   - 25  MHz, BUFG'd, drives the VGA timing / renderer
---     clk_serial  - 125 MHz, BUFG'd, drives the OSERDESE2 serializers
---                   (5x pixel; matches the system clock frequency)
+--   Wrapper around the Vivado Clocking Wizard IP (an MMCM under the
+--   hood). Takes the on-board 125 MHz sysclk and produces three
+--   synchronous outputs:
+--     clk_pixel   25  MHz (VGA timing + console renderer + TMDS encode)
+--     clk_serial  125 MHz (TMDS serializer high-speed input; matches
+--                          the system clock so OSERDESE2 sees a
+--                          synchronous CLK / CLKDIV pair)
+--     clk_sys     125 MHz (the rest of the design)
+--   ref: Vivado Clocking Wizard PG065; UG472 7-Series Clocking
+--        Resources.
 --
---   VCO = 125 * 8 = 1000 MHz, well inside the MMCME2 -1 speed-grade range.
--- ============================================================================
+--   The IP itself is generated on the fly from scripts/build.tcl
+--   (create_ip / set_property / generate_target) so there's no .xci
+--   committed -- only this wrapper.
 
 library ieee;
 use ieee.std_logic_1164.all;
-
-library unisim;
-use unisim.vcomponents.all;
 
 entity clk_wiz_hdmi is
     port (
@@ -28,58 +29,29 @@ entity clk_wiz_hdmi is
 end entity;
 
 architecture rtl of clk_wiz_hdmi is
-    signal clk_in_buf  : std_logic;
-    signal clk_fb_unb  : std_logic;
-    signal clk_fb      : std_logic;
-    signal clk_pix_unb : std_logic;
-    signal clk_ser_unb : std_logic;
-    signal clk_sys_unb : std_logic;
+
+    -- IP-generated component. Vivado writes the matching declaration
+    -- in <module_name>.vhd; we just need to match its port list.
+    component clk_wiz_hdmi_ip
+        port (
+            clk_in1  : in  std_logic;
+            reset    : in  std_logic;
+            clk_out1 : out std_logic;     -- 25 MHz pixel
+            clk_out2 : out std_logic;     -- 125 MHz serial
+            clk_out3 : out std_logic;     -- 125 MHz sys
+            locked   : out std_logic
+        );
+    end component;
+
 begin
 
-    ibuf_clk : IBUFG
-        port map ( I => clk_in, O => clk_in_buf );
-
-    mmcm_i : MMCME2_BASE
-        generic map (
-            BANDWIDTH          => "OPTIMIZED",
-            CLKFBOUT_MULT_F    => 8.0,             -- VCO = 1000 MHz
-            CLKFBOUT_PHASE     => 0.0,
-            CLKIN1_PERIOD      => 8.0,             -- 125 MHz
-            CLKOUT0_DIVIDE_F   => 40.0,            -- 25 MHz pixel
-            CLKOUT0_PHASE      => 0.0,
-            CLKOUT0_DUTY_CYCLE => 0.5,
-            CLKOUT1_DIVIDE     => 8,               -- 125 MHz serial
-            CLKOUT1_PHASE      => 0.0,
-            CLKOUT1_DUTY_CYCLE => 0.5,
-            CLKOUT2_DIVIDE     => 8,               -- 125 MHz sys
-            CLKOUT2_PHASE      => 0.0,
-            CLKOUT2_DUTY_CYCLE => 0.5,
-            DIVCLK_DIVIDE      => 1,
-            REF_JITTER1        => 0.010,
-            STARTUP_WAIT       => FALSE )
+    u_clk_wiz : clk_wiz_hdmi_ip
         port map (
-            CLKOUT0   => clk_pix_unb,
-            CLKOUT0B  => open,
-            CLKOUT1   => clk_ser_unb,
-            CLKOUT1B  => open,
-            CLKOUT2   => clk_sys_unb,
-            CLKOUT2B  => open,
-            CLKOUT3   => open,
-            CLKOUT3B  => open,
-            CLKOUT4   => open,
-            CLKOUT5   => open,
-            CLKOUT6   => open,
-            CLKFBOUT  => clk_fb_unb,
-            CLKFBOUTB => open,
-            LOCKED    => locked,
-            CLKIN1    => clk_in_buf,
-            PWRDWN    => '0',
-            RST       => rst_in,
-            CLKFBIN   => clk_fb );
-
-    bufg_fb  : BUFG port map ( I => clk_fb_unb,  O => clk_fb );
-    bufg_pix : BUFG port map ( I => clk_pix_unb, O => clk_pixel );
-    bufg_ser : BUFG port map ( I => clk_ser_unb, O => clk_serial );
-    bufg_sys : BUFG port map ( I => clk_sys_unb, O => clk_sys );
+            clk_in1  => clk_in,
+            reset    => rst_in,
+            clk_out1 => clk_pixel,
+            clk_out2 => clk_serial,
+            clk_out3 => clk_sys,
+            locked   => locked );
 
 end architecture;

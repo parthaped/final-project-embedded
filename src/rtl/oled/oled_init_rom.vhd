@@ -1,34 +1,27 @@
--- ============================================================================
 -- oled_init_rom.vhd
---   ROM holding the SSD1306 init byte sequence for the 128x32 Pmod OLED,
---   followed by the page+column-window setup that we send before every
---   frame.  Each entry is 9 bits:
---       bit 8     = D/C          (0 = command, 1 = data)
---       bits 7..0 = byte payload
+--   ROM holding the SSD1306 init byte sequence followed by the per-frame
+--   page+column window setup we resend before every refresh.
+--   ref: SSD1306 controller datasheet; Digilent Pmod OLED reference
+--        manual.
 --
---   `addr` is a free-running counter driven by pmod_oled_top.  When `addr`
---   reaches INIT_END the consumer stops the init phase; when it reaches
---   FRAME_PREFIX_END the consumer stops the per-frame prefix.
--- ============================================================================
+--   Each entry is 9 bits: bit 8 is the D/C line (0=command, 1=data) and
+--   the low 8 bits are the byte that goes out on SPI. INIT_LEN bytes
+--   are sent once at power-up; the remaining PREFIX_LEN bytes get sent
+--   before each frame so the addressing window is always known good.
 
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 package oled_init_pkg is
-    -- The init sequence (commands only).  Tuned for the 128x32 SSD1306.
-    constant INIT_LEN : integer := 26;
-
-    -- The per-frame prefix that re-sets column/page address windows.
+    constant INIT_LEN   : integer := 26;
     constant PREFIX_LEN : integer := 6;
-
-    -- Total payload.
-    constant ROM_LEN : integer := INIT_LEN + PREFIX_LEN;
+    constant ROM_LEN    : integer := INIT_LEN + PREFIX_LEN;
 
     type rom_t is array (0 to ROM_LEN-1) of std_logic_vector(8 downto 0);
 
     constant OLED_ROM : rom_t := (
-        -- ----- INIT (commands) -------------------------------------------
+        -- init (commands) -- values from the SSD1306 datasheet
         0  => '0' & x"AE",     -- display off
         1  => '0' & x"D5",     -- set display clock divide
         2  => '0' & x"80",     --   ratio 0x80
@@ -41,10 +34,10 @@ package oled_init_pkg is
         9  => '0' & x"14",     --   enable
         10 => '0' & x"20",     -- memory addressing mode
         11 => '0' & x"00",     --   horizontal
-        12 => '0' & x"A1",     -- segment remap (column 127 mapped to SEG0)
+        12 => '0' & x"A1",     -- segment remap (column 127 -> SEG0)
         13 => '0' & x"C8",     -- COM scan direction (remapped)
         14 => '0' & x"DA",     -- COM pins config
-        15 => '0' & x"02",     --   sequential, no remap, for 128x32
+        15 => '0' & x"02",     --   sequential, no remap (128x32)
         16 => '0' & x"81",     -- contrast
         17 => '0' & x"8F",     --   0x8F
         18 => '0' & x"D9",     -- precharge
@@ -56,7 +49,7 @@ package oled_init_pkg is
         24 => '0' & x"2E",     -- deactivate scroll
         25 => '0' & x"AF",     -- display on
 
-        -- ----- per-frame prefix (commands) -------------------------------
+        -- per-frame prefix (commands)
         26 => '0' & x"21",     -- column address
         27 => '0' & x"00",     --   start 0
         28 => '0' & x"7F",     --   end 127

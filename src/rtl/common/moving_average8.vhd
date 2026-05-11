@@ -1,11 +1,10 @@
--- ============================================================================
 -- moving_average8.vhd
---   Sliding 8-sample box-car average for an unsigned input bus.  On every
---   rising edge of `valid_in`, the new sample replaces the oldest one and
---   the running sum is updated incrementally (no multipliers).  Output =
---   sum >> 3 (truncating divide by 8).  `valid_out` strobes one cycle after
---   each update.
--- ============================================================================
+--   8-tap sliding average for an unsigned bus. On each valid_in we
+--   shift the new sample into a small array, update a running sum
+--   (subtract the oldest, add the new), and drive data_out = sum/8.
+--   Doing the sum incrementally means we never need a multiplier and
+--   the divide-by-8 is just a right shift. valid_out pulses one cycle
+--   after the new sample is seen.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -28,7 +27,7 @@ end entity;
 architecture rtl of moving_average8 is
     type sample_array_t is array (0 to 7) of unsigned(DATA_WIDTH-1 downto 0);
     signal samples : sample_array_t := (others => (others => '0'));
-    signal sum     : unsigned(DATA_WIDTH+2 downto 0) := (others => '0'); -- +3 bits headroom
+    signal sum     : unsigned(DATA_WIDTH+2 downto 0) := (others => '0');
 begin
     process(clk)
         variable next_sum : unsigned(sum'range);
@@ -42,20 +41,16 @@ begin
             else
                 valid_out <= '0';
                 if valid_in = '1' then
-                    -- Subtract the oldest sample, add the new one.
                     next_sum := sum
                               - resize(samples(7), sum'length)
                               + resize(data_in,    sum'length);
                     sum <= next_sum;
 
-                    -- Shift the sample window: samples(7) is dropped, the
-                    -- newest goes into samples(0).
                     for i in 7 downto 1 loop
                         samples(i) <= samples(i-1);
                     end loop;
                     samples(0) <= data_in;
 
-                    -- Output the new average (sum/8 = sum >> 3).
                     data_out  <= resize(shift_right(next_sum, 3), DATA_WIDTH);
                     valid_out <= '1';
                 end if;

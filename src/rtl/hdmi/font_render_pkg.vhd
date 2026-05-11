@@ -1,14 +1,8 @@
--- ============================================================================
 -- font_render_pkg.vhd
---   Helpers for rendering scaled text on the HDMI console using the
---   existing 5x8 OLED font (`font_5x8_pkg`).  All helpers return a
---   single bit ("is this pixel lit?") so the panel renderers can
---   compose them with logic-OR to build complete strings, then
---   colour the result downstream.
---
---   Pixel coordinates are passed as integers because the renderers
---   already promote x_in/y_in to integers for layout arithmetic.
--- ============================================================================
+--   Helpers for drawing scaled text on the HDMI console using the same
+--   5x8 OLED font (font_5x8_pkg). Each helper returns one bit ("is this
+--   query pixel lit?") so the panel renderers can OR a bunch of glyphs
+--   together to build full strings, then colour the result downstream.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -18,10 +12,10 @@ use work.font_5x8_pkg.all;
 
 package font_render_pkg is
 
-    -- '1' iff the query pixel (px, py) lands on a lit pixel of the
-    -- 5x8 glyph for `asc` when the glyph is drawn at top-left (sx,sy)
-    -- with integer pixel scale `scale` (1 = native, 2 = 2x, ..., 8 = 8x).
-    -- Spacer column (idx 5) and any pixel outside the 5x8 grid return '0'.
+    -- Returns '1' iff (px, py) lands on a lit pixel of the 5x8 glyph
+    -- for `asc` when drawn at top-left (sx, sy) with integer scale
+    -- (1 = native, 2 = 2x, ...). Spacer column (idx 5) and any pixel
+    -- outside the 5x8 grid return '0'.
     function glyph_lit (
         px, py  : integer;
         sx, sy  : integer;
@@ -29,27 +23,18 @@ package font_render_pkg is
         asc     : std_logic_vector(7 downto 0)
     ) return std_logic;
 
-    -- ASCII byte for a literal character.  Saves typing x"..." for
-    -- string constants.
     function asc_of (c : character) return std_logic_vector;
 
-    -- Convert one BCD digit (0..9) to its ASCII byte.
     function digit_asc (d : integer) return std_logic_vector;
 
-    -- Return ASCII byte for a single character of a fixed-width status
-    -- word.  The renderers pull in word arrays (severity, ambient,
-    -- state) and ask for the i-th character; this is the glue.
     function char_at (s : string; i : integer) return std_logic_vector;
 
-    -- Decompose an 8-bit value into hundreds / tens / ones digits
-    -- (each 0..9 in a 4-bit nibble).  Returns (h, t, o).
     type bcd3_t is record
         h, t, o : unsigned(3 downto 0);
     end record;
 
     function to_bcd3 (v : unsigned(7 downto 0)) return bcd3_t;
 
-    -- Same but for 16-bit values, returning up to 5 digits.
     type bcd5_t is record
         ten_thou, thou, hund, tens, ones : unsigned(3 downto 0);
     end record;

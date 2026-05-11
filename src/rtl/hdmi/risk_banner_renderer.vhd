@@ -1,35 +1,12 @@
--- ============================================================================
 -- risk_banner_renderer.vhd
---   Renders the headline panel of the perimeter monitor: a giant
---   "RISK: <word>" line followed by two smaller status rows.  Drawn
---   inside a fixed 384x160 px panel; the composer is responsible for
---   placing it on the screen and gating the rest of the picture.
+--   The big "RISK: <word>" headline panel plus two smaller status rows
+--   (PRESENCE / LIGHT). 384x160 px panel; the composer drops it onto
+--   the screen and gates the rest of the picture.
 --
---   Live data
---     severity_now / severity_held : the FSM-side severity (00..11) plus
---       a 1-tick latched copy from the contact log so the banner can
---       fall back on the most-recent contact's severity when there is
---       no live presence.  We pick whichever is more "interesting" so
---       the headline never reads SAFE while there's still a recent
---       contact outstanding.
---     presence       : '1' iff sonar_alert is currently asserted
---     range_in       : current filtered range, 0..255 in
---     ambient_mode   : 2-bit ambient classification
---     als_value      : current filtered ALS, 0..255 lux
---     blink          : 1-bit "frame blink" toggle for CRIT severity
---     arm            : '1' = system armed; when '0', forces the banner
---                       to display "SAFE" in dimmed colours
---
---   Output
---     red/green/blue : 8-bit RGB colour for the queried (x_in, y_in)
---                       pixel, rendered against transparent (= 0,0,0)
---     active         : '1' if this pixel is part of any glyph this panel
---                       drew (so the composer can blend it over the
---                       panel-background tint).
---
---   Pipeline depth: one register stage on inputs, one on outputs (2
---   cycles total).  The composer accounts for this when delaying sync.
--- ============================================================================
+--   Inputs are registered once (decouple the composer's signals from
+--   our combinational logic) and the per-pixel colour is also
+--   registered, so the panel has 2 cycles of latency end-to-end. The
+--   composer accounts for that when delaying sync.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -49,7 +26,6 @@ entity risk_banner_renderer is
         clk_pixel    : in  std_logic;
         rst          : in  std_logic;
 
-        -- Panel-local pixel coords (composer subtracts panel origin).
         x_in         : in  unsigned(9 downto 0);
         y_in         : in  unsigned(9 downto 0);
 
@@ -69,7 +45,6 @@ entity risk_banner_renderer is
 end entity;
 
 architecture rtl of risk_banner_renderer is
-    -- --------------- input pipeline ----------------------------------
     signal x_s1, y_s1     : integer range 0 to 1023 := 0;
     signal sev_s1         : unsigned(1 downto 0) := (others => '0');
     signal pres_s1        : std_logic := '0';
@@ -79,13 +54,12 @@ architecture rtl of risk_banner_renderer is
     signal blink_s1       : std_logic := '0';
     signal arm_s1         : std_logic := '1';
 
-    -- --------------- output pipeline ---------------------------------
     signal red_r, green_r, blue_r : std_logic_vector(7 downto 0) :=
         (others => '0');
     signal active_r       : std_logic := '0';
 
-    -- The five severity words (4 chars each, padded with leading
-    -- space if needed so the word always occupies 4 glyph slots).
+    -- Severity words, padded with leading spaces so each occupies four
+    -- glyph slots and the headline width never changes.
     constant W_SAFE : string(1 to 4) := "SAFE";
     constant W_LOW  : string(1 to 4) := " LOW";
     constant W_MED  : string(1 to 4) := " MED";
@@ -99,29 +73,28 @@ architecture rtl of risk_banner_renderer is
 
     -- BIG-text layout
     constant BIG_Y    : integer := 14;
-    constant BIG_W    : integer := 6 * BIG_SCALE;        -- per char
+    constant BIG_W    : integer := 6 * BIG_SCALE;
     constant BIG_X0   : integer := (PANEL_W - 10 * BIG_W) / 2;
 
-    -- Small-text layout (PRESENCE row, LIGHT row)
-    constant SML_W    : integer := 6 * SMALL_SCALE;      -- per char
+    -- Small-text layout
+    constant SML_W    : integer := 6 * SMALL_SCALE;
     constant ROW_PRES : integer := 84;
     constant ROW_LIGHT: integer := 110;
     constant SML_X0   : integer := 24;
 
-    -- Helpers reused below.
     function sev_color_r (s : unsigned(1 downto 0); blnk : std_logic;
                           armed : std_logic; pres : std_logic)
         return std_logic_vector
     is
     begin
         if armed = '0' or pres = '0' then
-            return x"30";          -- dim green when SAFE / disarmed
+            return x"30";
         else
             case s is
                 when "00" => return x"FF";  -- LOW   yellow
                 when "01" => return x"FF";  -- MED   orange
                 when "10" => return x"FF";  -- HIGH  red
-                when others =>             -- CRIT  red+blink
+                when others =>              -- CRIT  red+blink
                     if blnk = '1' then return x"FF"; else return x"40"; end if;
             end case;
         end if;
@@ -133,12 +106,12 @@ architecture rtl of risk_banner_renderer is
     is
     begin
         if armed = '0' or pres = '0' then
-            return x"E0";          -- bright green = SAFE
+            return x"E0";
         else
             case s is
-                when "00" => return x"E0";  -- LOW   yellow
-                when "01" => return x"80";  -- MED   orange
-                when "10" => return x"00";  -- HIGH  red
+                when "00" => return x"E0";
+                when "01" => return x"80";
+                when "10" => return x"00";
                 when others =>
                     if blnk = '1' then return x"00"; else return x"00"; end if;
             end case;
@@ -165,9 +138,7 @@ architecture rtl of risk_banner_renderer is
 
 begin
 
-    -- =========================================================================
-    -- Stage 1: register inputs (decouple long fanout, ease timing).
-    -- =========================================================================
+    -- Register inputs.
     process(clk_pixel)
     begin
         if rising_edge(clk_pixel) then
@@ -195,30 +166,25 @@ begin
         end if;
     end process;
 
-    -- =========================================================================
-    -- Stage 2: per-pixel decision.
-    -- The BIG word is 10 chars: "RISK: " (6) + 4-char severity word.
-    -- The PRESENCE and LIGHT rows are <= 22 chars each at SMALL_SCALE.
-    -- =========================================================================
+    -- Per-pixel decision. The big word is 10 chars wide ("RISK: " plus
+    -- the 4-char severity word). The two small rows are <= 22 chars
+    -- each at SMALL_SCALE.
     process(clk_pixel)
         variable big_lit  : std_logic;
         variable sml_lit  : std_logic;
         variable px, py   : integer;
 
-        -- Severity word selection (1-of-5).
         variable sev_word : string(1 to 4);
 
-        -- BCD digits of the live range / ALS values for the small rows.
         variable rng_bcd : bcd3_t;
         variable als_bcd : bcd3_t;
 
-        -- Ambient label.
         variable amb_word : string(1 to 6);
 
-        -- Effective severity for the headline: when there is no
-        -- presence we always show SAFE so the operator never sees a
-        -- stale "HIGH" reading just because a contact was logged
-        -- earlier.  When disarmed we also show SAFE in dim colours.
+        -- When there is no live presence we always show SAFE so the
+        -- headline never reads stale "HIGH" text just because there
+        -- was a contact a minute ago. Disarmed also forces SAFE in
+        -- dim colours.
         variable eff_sev : unsigned(1 downto 0);
         variable show_sev : boolean;
 
@@ -240,9 +206,6 @@ begin
                 px := x_s1;
                 py := y_s1;
 
-                -- Pick the displayed severity word.  When there is no
-                -- presence, force SAFE (the contact log handles
-                -- per-event history; the banner is "live").
                 show_sev := (arm_s1 = '1') and (pres_s1 = '1');
                 if not show_sev then
                     sev_word := W_SAFE;
@@ -266,9 +229,7 @@ begin
                 rng_bcd := to_bcd3(range_s1);
                 als_bcd := to_bcd3(als_s1);
 
-                ------------------------------------------------------------
-                -- BIG word: "RISK: " + sev_word, scale BIG_SCALE.
-                ------------------------------------------------------------
+                -- Big word: "RISK: " + sev_word at BIG_SCALE.
                 big_lit := '0';
                 for i in 0 to 5 loop
                     big_lit := big_lit or
@@ -285,11 +246,7 @@ begin
                                   char_at(sev_word, i+1));
                 end loop;
 
-                ------------------------------------------------------------
-                -- PRESENCE row.  20 chars total:
-                --   "PRESENCE: " (10) + "YES" or "NO " (3) + " " (1)
-                --   + 3-digit range (3) + " IN" (3)
-                ------------------------------------------------------------
+                -- Presence row: "PRESENCE: YES/NO  XXX IN"
                 sml_lit := '0';
                 for i in 0 to 9 loop
                     sml_lit := sml_lit or
@@ -314,7 +271,6 @@ begin
                     end if;
                 end loop;
                 if pres_s1 = '1' and arm_s1 = '1' then
-                    -- 3-digit range and " IN"
                     sml_lit := sml_lit or
                         glyph_lit(px, py,
                                   SML_X0 + 14 * SML_W, ROW_PRES,
@@ -342,11 +298,7 @@ begin
                                   char_at(LBL_IN, 2));
                 end if;
 
-                ------------------------------------------------------------
-                -- LIGHT row.  Up to 21 chars:
-                --   "LIGHT: " (7) + 6-char ambient label + " LUX " (5)
-                --   + 3-digit lux
-                ------------------------------------------------------------
+                -- Light row: "LIGHT: <ambient> LUX XXX"
                 for i in 0 to 6 loop
                     sml_lit := sml_lit or
                         glyph_lit(px, py,
@@ -384,11 +336,8 @@ begin
                               SMALL_SCALE,
                               digit_asc(to_integer(als_bcd.o)));
 
-                ------------------------------------------------------------
-                -- Compose colour.  BIG word is severity-coloured; the
-                -- small rows are always bright cyan-green so they read
-                -- as supporting context regardless of severity.
-                ------------------------------------------------------------
+                -- Big word picks up severity colour; small rows are a
+                -- constant cyan-green so they read as supporting info.
                 if big_lit = '1' then
                     red_r   <= sev_color_r(eff_sev, blink_s1, arm_s1, pres_s1);
                     green_r <= sev_color_g(eff_sev, blink_s1, arm_s1, pres_s1);

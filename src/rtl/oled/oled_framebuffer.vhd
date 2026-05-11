@@ -1,12 +1,9 @@
--- ============================================================================
 -- oled_framebuffer.vhd
---   512-byte simple dual-port RAM (4 pages x 128 columns) for the SSD1306
---   128x32 panel.  Vivado will infer one BRAM18.
---
---   Layout matches the SSD1306 horizontal-addressing data stream:
---       byte index = page * 128 + column
---       inside the byte, bit 0 = top pixel of the page.
--- ============================================================================
+--   512-byte simple dual-port RAM for the SSD1306 (4 pages of 128
+--   columns). The synthesizer infers one BRAM18 from the case-statement
+--   read and the registered write. Layout matches the SSD1306
+--   horizontal addressing data stream: byte index = page * 128 + col,
+--   bit 0 of each byte is the top pixel.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -16,12 +13,10 @@ entity oled_framebuffer is
     port (
         clk    : in  std_logic;
 
-        -- Write port
         we     : in  std_logic;
-        waddr  : in  unsigned(8 downto 0);            -- 0..511
+        waddr  : in  unsigned(8 downto 0);
         wdata  : in  std_logic_vector(7 downto 0);
 
-        -- Read port
         raddr  : in  unsigned(8 downto 0);
         rdata  : out std_logic_vector(7 downto 0)
     );

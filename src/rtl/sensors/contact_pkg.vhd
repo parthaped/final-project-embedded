@@ -1,10 +1,8 @@
--- ============================================================================
 -- contact_pkg.vhd
---   Shared types for the perimeter-monitor contact log: the per-slot
---   record `contact_t` and the 8-element `contact_array_t`.  Pulled out
---   into a package so the contact_log module, the OLED status panel,
---   and the HDMI event_log_renderer all reference the same definition.
--- ============================================================================
+--   Shared types for the contact log: one record per slot, an array of
+--   eight slots, and a pre-built null array we use when the log is
+--   reset. Pulled out into a package so the contact_log, the OLED, and
+--   the HDMI event log can all reference the same definition.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -14,11 +12,11 @@ package contact_pkg is
     constant N_CONTACT_SLOTS : positive := 8;
 
     type contact_t is record
-        valid          : std_logic;                -- '1' = slot occupied
-        range_in       : unsigned(7 downto 0);     -- inches at the moment of contact
-        severity_score : unsigned(1 downto 0);     -- 00 LOW / 01 MED / 10 HIGH / 11 CRIT
-        ambient        : unsigned(1 downto 0);     -- ambient mode at moment of contact
-        t_log          : unsigned(15 downto 0);    -- system_clock.t_seconds when logged
+        valid          : std_logic;
+        range_in       : unsigned(7 downto 0);
+        severity_score : unsigned(1 downto 0);
+        ambient        : unsigned(1 downto 0);
+        t_log          : unsigned(15 downto 0);
     end record;
 
     type contact_array_t is array (0 to N_CONTACT_SLOTS-1) of contact_t;

@@ -1,13 +1,13 @@
--- ============================================================================
 -- oled_spi_master.vhd
---   Minimal write-only 8-bit SPI master for the SSD1306 on the Pmod OLED.
---   Mode 0 (CPOL=0, CPHA=0), MSB first.  DC is just a level signal that
---   accompanies the byte (data vs command).
+--   Write-only 8-bit SPI master for the SSD1306 on the Pmod OLED.
+--   ref: SSD1306 controller datasheet; Digilent Pmod OLED reference
+--        manual.
 --
---   start                 1-cycle pulse latches `dc_in` + `byte_in` and
---                         begins a transfer.
---   busy                  high while the transfer is in progress.
--- ============================================================================
+--   Mode 0 (CPOL=0, CPHA=0), MSB first. The D/C line is just a level we
+--   carry alongside the byte (low = command, high = data). A 1-cycle
+--   start pulse latches dc_in/byte_in and drops CS low; busy stays high
+--   until we're back idle. SCLK is built from the system clock by
+--   counting half-periods, same as the ALS SPI master.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -15,7 +15,6 @@ use ieee.numeric_std.all;
 
 entity oled_spi_master is
     generic (
-        -- 12 cycles at 125 MHz -> ~5.2 MHz SCLK (well under SSD1306 max).
         SCLK_HALF_CYCLES : positive := 12
     );
     port (
@@ -77,7 +76,6 @@ begin
                         end if;
 
                     when S_BIT_SETUP =>
-                        -- SCLK=0, MOSI = sr(7); wait one half period for setup.
                         if half_cnt = to_unsigned(SCLK_HALF_CYCLES-1, half_cnt'length) then
                             half_cnt <= (others => '0');
                             sclk_r   <= '1';

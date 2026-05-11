@@ -1,14 +1,13 @@
--- ============================================================================
 -- tmds_serializer.vhd
---   10:1 serializer for one TMDS lane on Zynq-7000 (xc7z010).  Uses two
---   cascaded OSERDESE2 primitives (master + slave) in DDR 10:1 mode, then
---   drives the result through OBUFDS.
+--   10:1 serializer for one TMDS lane on the xc7z010 (Zybo Z7-10).
+--   ref: Xilinx XAPP1064 (DVI on 7-series fabric); UG471 7-Series
+--        SelectIO User Guide.
 --
---   The same module is reused for the clock channel by feeding the constant
---   pattern "1111100000" on `data_in`.
---
---   Reference: Xilinx XAPP1064 / UG471 7-Series SelectIO User Guide.
--- ============================================================================
+--   We need to send 10 bits per pixel out of one differential pair, at
+--   pixel_clock x 5 in DDR. The 7-series OSERDESE2 only goes to 8:1, so
+--   we cascade a master + slave pair via SHIFTOUT/SHIFTIN to reach 10:1.
+--   The clock-channel TMDS lane reuses the same module and just sends
+--   the constant pattern "1111100000".
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -34,7 +33,7 @@ architecture rtl of tmds_serializer is
     signal oq     : std_logic;
 begin
 
-    -- Master serializer: emits bits 0..7.
+    -- Master: emits bits 0..7.
     oserdes_m : OSERDESE2
         generic map (
             DATA_RATE_OQ   => "DDR",
@@ -71,7 +70,7 @@ begin
             TBYTEIN   => '0',
             TCE       => '0' );
 
-    -- Slave serializer: contributes bits 8 and 9 via SHIFTOUT.
+    -- Slave: contributes bits 8..9 via SHIFTOUT into the master.
     oserdes_s : OSERDESE2
         generic map (
             DATA_RATE_OQ   => "DDR",

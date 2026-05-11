@@ -1,21 +1,13 @@
--- ============================================================================
 -- hdmi_top.vhd
---   Wires together the VGA timing generator, the perimeter-monitor
---   console renderer, three TMDS encoders, and four TMDS serializers
---   (R / G / B / clock) to drive the on-board HDMI TX port in DVI
---   mode.
+--   Wires the VGA timing generator, the console renderer, three TMDS
+--   encoders, and four TMDS serializers (R/G/B + clock) into the
+--   HDMI TX port in plain DVI mode (no audio, no DDC). HPD is held high
+--   so the monitor latches.
 --
---   Replaces the previous fixed-content radar_renderer with the
---   richer console_renderer that composes the risk banner, risk
---   matrix, dual strip chart, timestamped event log, header strip,
---   and severity border.
---
---   DVI channel mapping (no DDC EDID is read; HPD is asserted high to
---   convince most monitors to lock):
---       Channel 0 = Blue   (carries c0=hsync, c1=vsync during blanking)
---       Channel 1 = Green  (c0=c1=0)
---       Channel 2 = Red    (c0=c1=0)
--- ============================================================================
+--   DVI channel mapping:
+--     Channel 0 = Blue   (carries c0=hsync, c1=vsync during blanking)
+--     Channel 1 = Green  (c0=c1=0)
+--     Channel 2 = Red    (c0=c1=0)
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -32,7 +24,6 @@ entity hdmi_top is
         clk_serial   : in  std_logic;
         rst          : in  std_logic;
 
-        -- Live system state (must already be in clk_pixel domain).
         range_in        : in  unsigned(7 downto 0);
         als_value       : in  unsigned(7 downto 0);
         ambient_mode    : in  unsigned(1 downto 0);

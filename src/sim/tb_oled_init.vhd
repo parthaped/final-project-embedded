@@ -1,15 +1,9 @@
--- ============================================================================
 -- tb_oled_init.vhd
---   Brings the pmod_oled_top out of reset, watches the SPI lines, and
---   verifies that the first 26 bytes the master sends (after the power
---   sequence completes) match the SSD1306 init sequence stored in
---   oled_init_pkg.OLED_ROM.
---
---   To keep the simulation short, the testbench reduces SYS_HZ via a
---   smaller refresh divider, but the *power-up* timers in pmod_oled_top
---   are scaled with SYS_HZ so we set SYS_HZ very low here so the 1 ms /
---   100 ms waits become a handful of cycles.
--- ============================================================================
+--   Pulls pmod_oled_top out of reset and checks that the first INIT_LEN
+--   bytes it sends out on the SPI bus match the SSD1306 init sequence
+--   from oled_init_pkg.OLED_ROM. SYS_HZ is set very low so the 1 ms /
+--   100 ms power-up timers collapse to a handful of cycles -- the init
+--   logic itself doesn't care about the absolute clock rate.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -26,10 +20,15 @@ architecture sim of tb_oled_init is
     signal clk          : std_logic := '0';
     signal rst          : std_logic := '1';
 
-    signal state_code     : std_logic_vector(2 downto 0) := "000";
-    signal distance_in    : unsigned(15 downto 0) := to_unsigned(42, 16);
-    signal als_value      : unsigned(15 downto 0) := to_unsigned(123, 16);
-    signal severity_score : std_logic_vector(1 downto 0) := "00";
+    signal state_code    : std_logic_vector(2 downto 0) := "000";
+    signal ambient_mode  : unsigned(1 downto 0) := "10";
+    signal count         : unsigned(3 downto 0) := (others => '0');
+    signal last_valid    : std_logic := '0';
+    signal last_range_in : unsigned(7 downto 0) := to_unsigned(42, 8);
+    signal last_severity : unsigned(1 downto 0) := "00";
+    signal last_t_log    : unsigned(15 downto 0) := (others => '0');
+    signal t_seconds     : unsigned(15 downto 0) := (others => '0');
+    signal near_th       : unsigned(7 downto 0) := to_unsigned(24, 8);
 
     signal cs_n   : std_logic;
     signal mosi   : std_logic;
@@ -39,7 +38,6 @@ architecture sim of tb_oled_init is
     signal vbat_n : std_logic;
     signal vdd_n  : std_logic;
 
-    -- Sample MOSI on rising edge of SCLK and pack 8 bits into a byte.
     signal capt_byte : std_logic_vector(7 downto 0) := (others => '0');
     signal bit_idx   : integer := 0;
     signal byte_done : std_logic := '0';
@@ -51,29 +49,30 @@ architecture sim of tb_oled_init is
 begin
     clk <= not clk after CLK_PERIOD/2;
 
-    -- DUT: shrink SYS_HZ so the 1 ms / 100 ms waits collapse to a few
-    -- microseconds.  The init logic is independent of SYS_HZ except for
-    -- those wait counters.
     dut : entity work.pmod_oled_top
         generic map (
             SYS_HZ     => 100_000,
             REFRESH_HZ => 30 )
         port map (
-            clk          => clk,
-            rst          => rst,
-            state_code     => state_code,
-            distance_in    => distance_in,
-            als_value      => als_value,
-            severity_score => severity_score,
-            oled_cs_n    => cs_n,
-            oled_mosi    => mosi,
-            oled_sclk    => sclk,
-            oled_dc      => dc,
-            oled_res_n   => res_n,
-            oled_vbat_n  => vbat_n,
-            oled_vdd_n   => vdd_n );
+            clk           => clk,
+            rst           => rst,
+            state_code    => state_code,
+            ambient_mode  => ambient_mode,
+            count         => count,
+            last_valid    => last_valid,
+            last_range_in => last_range_in,
+            last_severity => last_severity,
+            last_t_log    => last_t_log,
+            t_seconds     => t_seconds,
+            near_th       => near_th,
+            oled_cs_n     => cs_n,
+            oled_mosi     => mosi,
+            oled_sclk     => sclk,
+            oled_dc       => dc,
+            oled_res_n    => res_n,
+            oled_vbat_n   => vbat_n,
+            oled_vdd_n    => vdd_n );
 
-    -- Bit / byte capture
     capture : process(clk)
         variable last_sclk : std_logic := '0';
     begin
@@ -112,12 +111,9 @@ begin
         wait for CLK_PERIOD * 10;
         rst <= '0';
 
-        -- Wait long enough for power-up + 26 init bytes to flush.  At
-        -- SYS_HZ=100k the 1 ms timer is 100 cycles; the 100 ms VBAT timer
-        -- is 10000 cycles; plus 26 SPI bytes at ~200 cycles each.
+        -- power-up + INIT_LEN bytes need ~1 ms with SYS_HZ=100 kHz
         wait for 1 ms;
 
-        -- Validate the 26 init bytes (entries 0..INIT_LEN-1 in OLED_ROM).
         for i in 0 to INIT_LEN-1 loop
             assert byte_log(i) = OLED_ROM(i)
                 report "OLED init byte " & integer'image(i) &

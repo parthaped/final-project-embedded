@@ -1,9 +1,9 @@
--- ============================================================================
 -- debouncer.vhd
---   Generic active-high button debouncer.  Synchronizes the input, then
---   requires it to remain stable for STABLE_CYCLES before propagating to
---   the output.  Also generates a one-cycle rising-edge pulse.
--- ============================================================================
+--   Active-high button debouncer. We sync the raw button into our clock
+--   first, then only propagate a level change once it has held steady
+--   for STABLE_CYCLES cycles. Also makes a 1-cycle pulse on the rising
+--   edge of the debounced level so the FSM can use it as a "press"
+--   event without re-detecting edges itself.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -11,15 +11,14 @@ use ieee.numeric_std.all;
 
 entity debouncer is
     generic (
-        -- Default: 20 ms at 100 MHz = 2_000_000 cycles.
-        STABLE_CYCLES : positive := 2_000_000
+        STABLE_CYCLES : positive := 2_000_000   -- 20 ms at 100 MHz
     );
     port (
         clk        : in  std_logic;
         rst        : in  std_logic;
-        btn_in     : in  std_logic;     -- raw async button input
-        btn_level  : out std_logic;     -- debounced level
-        btn_pulse  : out std_logic      -- 1-cycle pulse on rising edge of level
+        btn_in     : in  std_logic;
+        btn_level  : out std_logic;
+        btn_pulse  : out std_logic
     );
 end entity;
 
@@ -30,8 +29,7 @@ architecture rtl of debouncer is
     signal level_d1   : std_logic := '0';
 begin
     sync_inst : entity work.synchronizer
-        generic map ( STAGES => 2, RST_VAL => '0' )
-        port map    ( clk => clk, rst => rst, d_in => btn_in, d_out => btn_sync );
+        port map ( clk => clk, rst => rst, d_in => btn_in, d_out => btn_sync );
 
     process(clk)
     begin

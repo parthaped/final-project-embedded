@@ -1,27 +1,14 @@
--- ============================================================================
 -- contact_log.vhd
---   Eight-slot contact log for the perimeter monitor.  Slot 0 is always
---   the most-recent contact; on every `write_pulse`, all existing
---   entries shift one slot toward the tail and the new entry is
---   inserted at slot 0 (so the oldest contact falls off when the log
---   is full -- newest-first eviction).  This gives the HDMI event-log
---   renderer a free youngest-first ordering.
+--   Eight-slot circular contact log. Slot 0 is always the newest
+--   contact: every write_pulse shifts slots 0..N-2 down one and puts
+--   the fresh entry at slot 0. If the log was full the oldest entry
+--   falls off the end. The HDMI event log reads slots in order so this
+--   gives newest-first display for free.
 --
---   On every `tick_60hz` the module sweeps the eight slots and
---   invalidates any whose age (current `t_seconds` minus stored
---   `t_log`) has exceeded MAX_AGE_SECONDS.  The slot's storage is left
---   alone, only its `valid` bit is cleared, so a stale entry won't
---   reappear and the count drops.
---
---   `clear_all` (driven by BTN3 / SW2 in the top level) wipes every
---   slot atomically.
---
---   Outputs:
---     contacts        - full 8-slot record array (newest at index 0)
---     count           - number of currently-valid slots (0..8)
---     last_*          - convenience aliases of slots(0) for OLED wiring
---                       and the risk banner's "PRESENCE" line.
--- ============================================================================
+--   Once a second (driven by the 60 Hz tick) we sweep all eight slots
+--   and clear any whose age has passed MAX_AGE_SECONDS. We only zero
+--   the valid bit, not the rest of the record, so the slot just stops
+--   being counted. clear_all wipes everything.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -31,9 +18,6 @@ use work.contact_pkg.all;
 
 entity contact_log is
     generic (
-        -- Default 600 s = 10 minutes, big enough that a normal demo
-        -- never sees an entry expire mid-presentation but small enough
-        -- that an idle log eventually cleans itself up.
         MAX_AGE_SECONDS : positive := 600
     );
     port (
@@ -63,8 +47,8 @@ end entity;
 architecture rtl of contact_log is
     signal slots : contact_array_t := CONTACTS_NULL;
 
-    -- Counts as a sum of std_logic 0/1 by converting to integers.  Eight
-    -- slots fit comfortably in a 4-bit count.
+    -- Walk the slots once and add up how many are valid. Eight slots
+    -- fit in a 4-bit count.
     function popcount8 (a : contact_array_t) return unsigned is
         variable n : unsigned(3 downto 0) := (others => '0');
     begin
@@ -78,8 +62,6 @@ architecture rtl of contact_log is
 
     function age_of (c : contact_t; tnow : unsigned(15 downto 0)) return unsigned is
     begin
-        -- Wraparound is fine because the seconds counter saturates at
-        -- 0xFFFF in system_clock; in practice ages are well under that.
         return tnow - c.t_log;
     end function;
 begin
@@ -91,9 +73,6 @@ begin
             if rst = '1' or clear_all = '1' then
                 slots <= CONTACTS_NULL;
             elsif write_pulse = '1' then
-                -- Shift slots N-1..1 down one (slot N-1 falls off if it
-                -- was valid -- newest-first eviction), insert new entry
-                -- at slot 0.
                 for i in N_CONTACT_SLOTS-1 downto 1 loop
                     slots(i) <= slots(i-1);
                 end loop;
@@ -107,10 +86,7 @@ begin
                 slots(0) <= new_entry;
 
             elsif tick_60hz = '1' then
-                -- Aging sweep.  Mutually exclusive with write_pulse so
-                -- a simultaneous write isn't lost; if both fire on the
-                -- same cycle the next tick_60hz will catch the aging
-                -- pass.
+                -- write has priority over the aging sweep
                 for i in 0 to N_CONTACT_SLOTS-1 loop
                     if slots(i).valid = '1' and
                        age_of(slots(i), t_seconds) >=

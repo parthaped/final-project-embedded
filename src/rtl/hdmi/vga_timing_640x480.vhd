@@ -1,15 +1,12 @@
--- ============================================================================
 -- vga_timing_640x480.vhd
---   640x480 @ 60 Hz pixel timing.
---      H total 800 = 640 act + 16 FP + 96 sync + 48 BP    (HSYNC negative)
---      V total 525 = 480 act + 10 FP +  2 sync + 33 BP    (VSYNC negative)
---   Pixel clock = 25 MHz.
+--   640x480 @ 60 Hz VGA pixel-timing generator.
+--   ref: tinyvga.com/vga-timing/640x480@60Hz (industry-standard timing
+--        numbers).
 --
---   Outputs:
---     x, y    pixel coordinates, valid only while de='1'
---     de      data-enable (active video)
---     hsync, vsync   raw sync pulses (active LOW)
--- ============================================================================
+--   H total 800 = 640 active + 16 FP + 96 sync + 48 BP   (HSYNC active low)
+--   V total 525 = 480 active + 10 FP +  2 sync + 33 BP   (VSYNC active low)
+--   Pixel clock = 25 MHz. The two counters here are the same divide-by-N
+--   pattern as Lab 1's clock_div, just nested.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -32,13 +29,13 @@ architecture rtl of vga_timing_640x480 is
     constant H_FP   : integer := 16;
     constant H_SYNC : integer := 96;
     constant H_BP   : integer := 48;
-    constant H_TOT  : integer := H_ACT + H_FP + H_SYNC + H_BP;   -- 800
+    constant H_TOT  : integer := H_ACT + H_FP + H_SYNC + H_BP;
 
     constant V_ACT  : integer := 480;
     constant V_FP   : integer := 10;
     constant V_SYNC : integer := 2;
     constant V_BP   : integer := 33;
-    constant V_TOT  : integer := V_ACT + V_FP + V_SYNC + V_BP;   -- 525
+    constant V_TOT  : integer := V_ACT + V_FP + V_SYNC + V_BP;
 
     signal hcnt : unsigned(9 downto 0) := (others => '0');
     signal vcnt : unsigned(9 downto 0) := (others => '0');

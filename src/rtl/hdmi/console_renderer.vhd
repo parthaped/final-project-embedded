@@ -1,34 +1,28 @@
--- ============================================================================
 -- console_renderer.vhd
---   Top-level composer for the perimeter monitor's HDMI console.
---   Replaces the old radar_renderer; instantiates one history_buffer
---   plus four panel renderers (risk_banner, risk_matrix, strip_chart,
---   event_log) and stitches them onto a 640x480 frame:
+--   Top-level composer for the HDMI console. Instantiates the history
+--   buffer plus the four panel renderers (risk_banner, risk_matrix,
+--   strip_chart, event_log) and stitches them onto a 640x480 frame:
 --
 --       y =   0..23  : header strip       (PERIMETER MONITOR T+...)
---       y =  24..183 : risk banner (left half)
---                      risk matrix (right half)
+--       y =  24..183 : risk banner (left half) + risk matrix (right)
 --       y = 184..343 : dual strip chart   (range top, light bottom)
 --       y = 344..463 : timestamped event log
---       y = 464..479 : status strip       (ARM / SENS / CONT  / clear hint)
+--       y = 464..479 : status strip       (ARM / SENS / CONT / BTN3 CLEAR)
 --
 --   On top of all that, the outer 4 px ring is painted as a severity
 --   border (off in SAFE/LOW, amber in MED, red in HIGH, flashing
---   red+white in CRIT) so a viewer across the room can read the
---   threat level even before they see the banner text.
+--   red+white in CRIT) so a viewer across the room can read the threat
+--   level even before they see the banner text.
 --
---   The composer also drives a slow `blink` signal (toggles every
---   ~0.5 s at 60 frames/s) shared with the risk_banner / risk_matrix
---   for CRIT-cell flashing.
+--   The composer also drives a slow blink (toggles every ~0.5 s at 60
+--   frames/s) shared with the risk_banner / risk_matrix for CRIT-cell
+--   flashing.
 --
---   Pipeline:
---       clk0  - x_in, y_in (raw VGA timing)
---       clk1  - x_s1, y_s1 registered; history_buffer addr issued
---       clk2  - panel input regs latched; BRAM output settled
---       clk3  - panel output regs settled
---       clk4  - composer mux + border + final RGB & sync delayed 4 cycles
---   Total = 4 clk_pixel cycles (matches a 25 MHz pipeline comfortably).
--- ============================================================================
+--   Pipeline: 4 clk_pixel cycles end-to-end. The composer registers
+--   pixel coords once, then reads the history buffer and feeds each
+--   panel; each panel has its own 2-cycle internal pipeline; the
+--   final mux at the end registers the colour. The sync delay line
+--   matches that depth.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -49,7 +43,6 @@ entity console_renderer is
         hsync_in        : in  std_logic;
         vsync_in        : in  std_logic;
 
-        -- Live system state, already CDC'd to clk_pixel.
         range_in        : in  unsigned(7 downto 0);
         als_value       : in  unsigned(7 downto 0);
         ambient_mode    : in  unsigned(1 downto 0);
@@ -95,38 +88,34 @@ architecture rtl of console_renderer is
     constant STATUS_H  : integer := 16;
     constant BORDER_W  : integer := 4;
 
-    -- Slow blink (~1 Hz at 60 vsync/s) shared with banner / matrix.
+    -- Slow ~1 Hz blink (toggle every 30 vsync edges at 60 Hz refresh).
     signal vsync_d   : std_logic := '1';
     signal frame_cnt : unsigned(5 downto 0) := (others => '0');
     signal blink_r   : std_logic := '0';
 
-    -- Stage 1 registers: x_in, y_in, sync.
+    -- Pipelined coords + sync. We need four cycles of delay so the
+    -- sync at the output lines up with the registered colour, which
+    -- is computed from x_s3/y_s3 and registered into red_r etc.
     signal x_s1, y_s1   : unsigned(9 downto 0) := (others => '0');
     signal de_s1, hs_s1, vs_s1 : std_logic := '0';
-
-    -- Stage 2 registers (track inputs).
     signal x_s2, y_s2   : unsigned(9 downto 0) := (others => '0');
     signal de_s2, hs_s2, vs_s2 : std_logic := '0';
-
-    -- Stage 3 registers.
     signal x_s3, y_s3   : unsigned(9 downto 0) := (others => '0');
     signal de_s3, hs_s3, vs_s3 : std_logic := '0';
-
-    -- Stage 4 sync (final output).
     signal de_s4, hs_s4, vs_s4 : std_logic := '0';
 
-    -- History buffer outputs (BRAM read latency 1, valid at "stage 2").
+    -- History buffer outputs.
     signal h_range, h_als : unsigned(7 downto 0);
     signal h_amb, h_sev   : unsigned(1 downto 0);
     signal h_event        : std_logic;
 
-    -- Per-panel x/y in panel-local coords, ready at "stage 1".
+    -- Per-panel x/y in panel-local coords.
     signal banner_x, banner_y : unsigned(9 downto 0) := (others => '0');
     signal matrix_x, matrix_y : unsigned(9 downto 0) := (others => '0');
     signal strip_x,  strip_y  : unsigned(9 downto 0) := (others => '0');
     signal evts_x,   evts_y   : unsigned(9 downto 0) := (others => '0');
 
-    -- Panel outputs (registered at "stage 3").
+    -- Panel outputs.
     signal br_r, br_g, br_b : std_logic_vector(7 downto 0);
     signal br_a             : std_logic;
     signal mr_r, mr_g, mr_b : std_logic_vector(7 downto 0);
@@ -136,7 +125,6 @@ architecture rtl of console_renderer is
     signal er_r, er_g, er_b : std_logic_vector(7 downto 0);
     signal er_a             : std_logic;
 
-    -- Final pixel.
     signal red_r, green_r, blue_r : std_logic_vector(7 downto 0) :=
         (others => '0');
 
@@ -148,7 +136,7 @@ architecture rtl of console_renderer is
     signal hdr_chars : hdr_chars_t := (others => x"20");
     signal sta_chars : sta_chars_t := (others => x"20");
 
-    -- Severity color palette for the border.
+    -- Severity colour palette for the border.
     function border_r (s : unsigned(1 downto 0); blnk : std_logic;
                        arm_q : std_logic) return std_logic_vector is
     begin
@@ -188,14 +176,13 @@ architecture rtl of console_renderer is
         end case;
     end function;
 
-    -- Background tint depending on ambient mode.
     function bg_r (a : unsigned(1 downto 0)) return std_logic_vector is
     begin
         case a is
-            when "00"   => return x"00";   -- NIGHT  : near-black
-            when "01"   => return x"00";   -- DIM    : darker green
-            when "10"   => return x"00";   -- DAY    : warm green
-            when others => return x"1A";   -- BRIGHT : washout
+            when "00"   => return x"00";
+            when "01"   => return x"00";
+            when "10"   => return x"00";
+            when others => return x"1A";
         end case;
     end function;
 
@@ -219,21 +206,16 @@ architecture rtl of console_renderer is
         end case;
     end function;
 
-    -- Pipelined live state (for stage-4 mux: severity, blink, arm).
+    -- Pipelined live state used by the final mux.
     signal sev_s2 : unsigned(1 downto 0) := (others => '0');
     signal sev_s3 : unsigned(1 downto 0) := (others => '0');
     signal arm_s3 : std_logic := '1';
     signal amb_s3 : unsigned(1 downto 0) := (others => '0');
     signal blink_s3 : std_logic := '0';
     signal pres_s3  : std_logic := '0';
-
-    -- Panel-active flag delayed an extra stage so the mux samples
-    -- aligned with the registered colour outputs.
 begin
 
-    -- =========================================================================
-    -- Slow blink: vsync gives 60 frames/s; toggle every 30 frames -> ~1 Hz.
-    -- =========================================================================
+    -- vsync gives 60 frames/s; toggle every 30 frames -> ~1 Hz.
     process(clk_pixel)
     begin
         if rising_edge(clk_pixel) then
@@ -255,9 +237,7 @@ begin
         end if;
     end process;
 
-    -- =========================================================================
-    -- Stage 1: register raw pixel coords + sync, derive panel-local xy.
-    -- =========================================================================
+    -- Register raw pixel coords + sync.
     process(clk_pixel)
     begin
         if rising_edge(clk_pixel) then
@@ -274,9 +254,8 @@ begin
         end if;
     end process;
 
-    -- Combinational panel-local mappings.  Out-of-panel pixels just
-    -- get a wraparound coord; downstream gating handles "this isn't my
-    -- panel".
+    -- Combinational panel-local coords (downstream gating handles
+    -- "this isn't my panel").
     banner_x <= x_s1 - to_unsigned(BANNER_X0, x_s1'length)
                 when x_s1 >= to_unsigned(BANNER_X0, x_s1'length)
                 else (others => '0');
@@ -301,9 +280,7 @@ begin
                 when y_s1 >= to_unsigned(EVTS_Y0, y_s1'length)
                 else (others => '0');
 
-    -- =========================================================================
-    -- History buffer (lives in clk_pixel, written once per vsync).
-    -- =========================================================================
+    -- History buffer: lives in clk_pixel, written once per vsync.
     hist_i : entity work.history_buffer
         port map (
             clk_pixel       => clk_pixel,
@@ -321,9 +298,7 @@ begin
             rd_severity     => h_sev,
             rd_event        => h_event );
 
-    -- =========================================================================
-    -- Panel renderers (each has 2-cycle internal pipeline).
-    -- =========================================================================
+    -- Panel renderers (each has 2 cycles of internal pipeline).
     banner_i : entity work.risk_banner_renderer
         port map (
             clk_pixel    => clk_pixel,
@@ -387,10 +362,8 @@ begin
             blue      => er_b,
             active    => er_a );
 
-    -- =========================================================================
-    -- Stage 2 / 3 sync delays so the final mux lines up with panel
-    -- outputs (panels output at "stage 3" relative to x_in).
-    -- =========================================================================
+    -- Sync + live-state delay line so the final mux lines up with the
+    -- panels (which output 2 cycles after their input register).
     process(clk_pixel)
     begin
         if rising_edge(clk_pixel) then
@@ -424,15 +397,10 @@ begin
         end if;
     end process;
 
-    -- =========================================================================
-    -- Header and status row ASCII assembly (registered once per clock,
-    -- but inputs change slowly so the register is mostly idle).
-    -- =========================================================================
+    -- Header + status row ASCII assembly (registered once per clock,
+    -- but the inputs change slowly so the register is mostly idle).
     process(clk_pixel)
         variable h_v : unsigned(15 downto 0);
-        variable mins, secs : integer range 0 to 5999;
-        variable rng_b   : bcd3_t;
-        variable lux_b   : bcd3_t;
         variable cnt_int : integer range 0 to 15;
         variable nth_b   : bcd3_t;
     begin
@@ -441,24 +409,7 @@ begin
                 hdr_chars <= (others => x"20");
                 sta_chars <= (others => x"20");
             else
-                -- "PERIMETER MONITOR T+HH:MM:SS  MODE:NIGHT  STATUS:ARM"
-                -- 0         1111111111222222222233333333334444444444555
-                -- 0123456789012345678901234567890123456789012345678901
-                -- Layout (53 chars):
-                --   0..16 : "PERIMETER MONITOR"
-                --   17    : ' '
-                --   18..19: "T+"
-                --   20..21: HH (or 00..99 mins)
-                --   22    : ':'
-                --   23..24: MM
-                --   25    : ':'
-                --   26..27: SS
-                --   28..29: "  "
-                --   30..34: "MODE:"
-                --   35..40: 6-char ambient
-                --   41    : ' '
-                --   42..47: "STATE:"
-                --   48..52: 5-char status (ARMED/IDLE )
+                -- "PERIMETER MONITOR T+HH:MM:SS  MODE:NIGHT  STATE:ARMED"
                 hdr_chars(0)  <= asc_of('P');
                 hdr_chars(1)  <= asc_of('E');
                 hdr_chars(2)  <= asc_of('R');
@@ -480,8 +431,7 @@ begin
                 hdr_chars(18) <= asc_of('T');
                 hdr_chars(19) <= asc_of('+');
 
-                -- T+ counter: HH:MM:SS where HH is hours of seconds
-                -- saturated at 99.  At 1 s/tick this is up to 99:59:59.
+                -- T+ counter as HH:MM:SS, saturated at 99:59:59.
                 h_v := t_seconds;
                 if h_v > to_unsigned(359999, 16) then
                     h_v := to_unsigned(359999, 16);
@@ -543,11 +493,7 @@ begin
                     hdr_chars(52) <= asc_of(' ');
                 end if;
 
-                ----------------------------------------------------------
-                -- Status strip:
-                --   "ARM:Y   SENS:NNN IN  CONT:N        BTN3 CLEAR   "
-                --    0   4   8        20    28          40
-                ----------------------------------------------------------
+                -- Status strip: "ARM:Y   SENS:NNN IN  CONT:N        BTN3 CLEAR"
                 sta_chars <= (others => x"20");
                 sta_chars(0) <= asc_of('A');
                 sta_chars(1) <= asc_of('R');
@@ -592,11 +538,7 @@ begin
         end if;
     end process;
 
-    -- =========================================================================
-    -- Final pixel decision (stage 4).  Picks a colour from the active
-    -- panel based on (x_s3, y_s3) and overlays the severity border.
-    -- Also draws the inline header and status text.
-    -- =========================================================================
+    -- Final pixel mux. Priority: border > header/status text > panel > bg.
     process(clk_pixel)
         variable px, py : integer;
         variable hdr_lit, sta_lit : std_logic;
@@ -613,7 +555,6 @@ begin
                 px := to_integer(x_s3);
                 py := to_integer(y_s3);
 
-                -- Header text (scale 2).
                 hdr_lit := '0';
                 if py >= HDR_Y0 and py < HDR_Y0 + HDR_H then
                     char_y0 := HDR_Y0 + (HDR_H - 16)/2;
@@ -628,7 +569,6 @@ begin
                                          2, asc);
                 end if;
 
-                -- Status text (scale 2).
                 sta_lit := '0';
                 if py >= STATUS_Y0 and py < STATUS_Y0 + STATUS_H then
                     char_y0 := STATUS_Y0 + (STATUS_H - 16)/2;
@@ -646,13 +586,9 @@ begin
                                          2, asc);
                 end if;
 
-                -- Severity border (outer 4 px ring).
                 on_border := (px < BORDER_W) or (px >= 640 - BORDER_W) or
                              (py < BORDER_W) or (py >= 480 - BORDER_W);
 
-                ----------------------------------------------------------
-                -- Compose: priority is border > panel > header/status text > bg
-                ----------------------------------------------------------
                 if de_s3 = '0' then
                     red_r   <= (others => '0');
                     green_r <= (others => '0');
@@ -661,9 +597,9 @@ begin
                 elsif on_border and arm_s3 = '1' and
                       (sev_s3 = "01" or sev_s3 = "10" or sev_s3 = "11") and
                       pres_s3 = '1' then
-                    -- Severity border only fires while there's a live
-                    -- presence, so the screen edge isn't permanently
-                    -- red after a contact.
+                    -- Severity border only fires while a presence is
+                    -- live, so the screen edge isn't permanently red
+                    -- after a single contact.
                     red_r   <= border_r(sev_s3, blink_s3, arm_s3);
                     green_r <= border_g(sev_s3, blink_s3, arm_s3);
                     blue_r  <= border_b(sev_s3, blink_s3, arm_s3);

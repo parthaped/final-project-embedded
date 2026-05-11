@@ -1,0 +1,22 @@
+# Vivado / xsim build artifacts
+build/
+*.jou
+*.log
+*.str
+*.pb
+.Xil/
+
+# Vivado project clutter (in case anyone opens this in project mode)
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.srcs/
+*.gen/
+vivado*.backup.*
+
+# Editor noise
+.vscode/
+*.swp
+*~

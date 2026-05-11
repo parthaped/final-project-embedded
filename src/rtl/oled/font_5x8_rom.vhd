@@ -1,16 +1,14 @@
--- ============================================================================
 -- font_5x8_rom.vhd
---   5x8 column-major bitmap font for the SSD1306.  Each glyph is five
---   bytes; bit 0 of each byte is the top pixel.
---
---   Only the characters needed by the OLED status strings are populated:
---       space, digits 0..9, ':', uppercase A..Z, '-' and '.' .
---   Anything else returns five zero bytes.
---
---   This is exposed as a *function* so consumers can call
---       font_glyph_col(asc, col)
---   and Vivado infers ROM from the case statement automatically.
--- ============================================================================
+--   5x8 column-major bitmap font for the OLED. Each glyph is five
+--   bytes; bit 0 of each byte is the top pixel. Only the characters
+--   used by the OLED status strings are populated (space, digits 0-9,
+--   ':', uppercase A-Z, '-' and '.'); anything else returns five zero
+--   bytes. We expose this as a function so consumers can call
+--   font_glyph(asc) and the synthesizer infers a small ROM from the
+--   case statement.
+--   ref: 5x7+descender pixel font tables from the SSD1306 community
+--        examples (pulled the lit-pixel tables from the public-domain
+--        Adafruit-style 5x7 table and zero-padded the bottom row).
 
 library ieee;
 use ieee.std_logic_1164.all;

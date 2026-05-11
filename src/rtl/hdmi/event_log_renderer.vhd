@@ -1,20 +1,15 @@
--- ============================================================================
 -- event_log_renderer.vhd
 --   Six-row timestamped event log panel using the 5x8 OLED font at
---   scale 2 (16 px tall glyphs).  Each row shows one entry from the
---   `contact_log`, formatted as a tightly-packed 27-character line:
+--   scale 2. Each row is one entry from the contact_log formatted as
+--   a 27-char line:
 --
 --       T-MM:SS  XXX IN  AMBIENT  SEV
 --
---   Each row's background is tinted by its severity colour so the
---   panel reads as a colour-coded list at a glance.
---
---   Implementation: each row is pre-formatted into a fixed-length
---   27-char array of ASCII bytes, registered once per clock from the
---   live contact array.  The per-pixel decision then performs a
---   single character-array lookup followed by one font_glyph_lit call,
---   which keeps the LUT/ROM cost manageable at synthesis time.
--- ============================================================================
+--   The row's background is tinted by its severity colour so the panel
+--   reads like a colour-coded list at a glance. We pre-format each row
+--   into a fixed-length array of ASCII bytes (registered once per
+--   clock from the live contact array), then per-pixel we just do one
+--   character lookup and one font_glyph call.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -49,7 +44,7 @@ entity event_log_renderer is
 end entity;
 
 architecture rtl of event_log_renderer is
-    constant CHAR_W   : integer := 6 * SCALE;        -- 12 px
+    constant CHAR_W   : integer := 6 * SCALE;
     constant ROW_X0   : integer := 8;
     constant N_CHARS  : positive := 27;
 
@@ -68,15 +63,12 @@ architecture rtl of event_log_renderer is
     constant W_HIGH : string(1 to 4) := "HIGH";
     constant W_CRIT : string(1 to 4) := "CRIT";
 
-    -- Registered per-row data.
     signal rows_q  : rows_t := (others => ROW_BLANK);
     signal valid_q : std_logic_vector(N_ROWS-1 downto 0) := (others => '0');
     signal sev_q   : unsigned(2*N_ROWS-1 downto 0) := (others => '0');
 
-    -- Registered pixel coords.
     signal x_s1, y_s1 : integer range 0 to 1023 := 0;
 
-    -- Output pipeline.
     signal red_r, green_r, blue_r : std_logic_vector(7 downto 0) :=
         (others => '0');
     signal active_r : std_logic := '0';
@@ -108,12 +100,9 @@ architecture rtl of event_log_renderer is
 
 begin
 
-    -- =========================================================================
-    -- Build each row's character array from the contact_log entry.
-    -- Recomputed every clock cycle, but the inputs are slow-changing
-    -- (contacts updates only on a log_pulse, t_seconds increments only
-    -- once per second) so this is just register-stable logic.
-    -- =========================================================================
+    -- Build each row's char array from the contact_log entry. The
+    -- contacts and t_seconds inputs change slowly so this register is
+    -- mostly idle.
     process(clk_pixel)
         variable age_v : unsigned(15 downto 0);
         variable mm    : integer range 0 to 99;
@@ -164,7 +153,6 @@ begin
                     end case;
 
                     r := ROW_BLANK;
-                    -- "T-MM:SS"
                     r(0)  := asc_of('T');
                     r(1)  := asc_of('-');
                     r(2)  := digit_asc(mm / 10);
@@ -172,21 +160,17 @@ begin
                     r(4)  := asc_of(':');
                     r(5)  := digit_asc(ss / 10);
                     r(6)  := digit_asc(ss mod 10);
-                    -- "  XXX"
                     r(9)  := digit_asc(to_integer(rng.h));
                     r(10) := digit_asc(to_integer(rng.t));
                     r(11) := digit_asc(to_integer(rng.o));
-                    -- " IN  "
                     r(13) := asc_of('I');
                     r(14) := asc_of('N');
-                    -- 6-char ambient
                     r(17) := char_at(amb_w, 1);
                     r(18) := char_at(amb_w, 2);
                     r(19) := char_at(amb_w, 3);
                     r(20) := char_at(amb_w, 4);
                     r(21) := char_at(amb_w, 5);
                     r(22) := char_at(amb_w, 6);
-                    -- 4-char severity
                     r(23) := char_at(sev_w, 1);
                     r(24) := char_at(sev_w, 2);
                     r(25) := char_at(sev_w, 3);
@@ -198,10 +182,7 @@ begin
         end if;
     end process;
 
-    -- =========================================================================
-    -- Per-pixel decision.  One mux into the per-row char array, one
-    -- glyph_lit call.
-    -- =========================================================================
+    -- Per-pixel decision: one mux into rows_q, one glyph_lit call.
     process(clk_pixel)
         variable px, py     : integer;
         variable row        : integer;

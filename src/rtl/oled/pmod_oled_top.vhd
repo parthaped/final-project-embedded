@@ -1,22 +1,21 @@
--- ============================================================================
 -- pmod_oled_top.vhd
---   Drives a Digilent Pmod OLED (SSD1306, 128x32) attached to JB.
+--   Drives the Digilent Pmod OLED (SSD1306, 128x32) on JB.
+--   ref: SSD1306 controller datasheet; Digilent Pmod OLED reference
+--        manual.
 --
---   In the perimeter-monitor build the OLED is a *secondary* status
---   panel; the HDMI console is the primary visualisation.  Layout:
---
+--   This is a small status panel that runs alongside the HDMI console.
+--   Layout:
 --       Line 0:  STATE: <state>
---       Line 1:  MODE: <ambient>  C:<count>
---       Line 2:  LAST: <range>IN T-<age>S
---       Line 3:  SEV: <sev>    LIM:<near_th>
+--       Line 1:  MODE:  <ambient>      C:<count>
+--       Line 2:  LAST:  <range>IN T-<age>S
+--       Line 3:  SEV:   <sev>          LIM:<near_th>
 --
---   The OLED's compact summary is what an operator standing next to
---   the board glances at; everything else lives on the HDMI console.
---
---   The state machine that drives the SSD1306 (power-up, init ROM,
---   per-refresh framebuffer render, SPI streaming) is unchanged from
---   the previous build; only the text-fill sub-sequencer is new.
--- ============================================================================
+--   Internal flow:
+--     power-up -> SSD1306 init ROM -> per-refresh framebuffer fill ->
+--     stream framebuffer over SPI -> back to wait-for-next-tick.
+--   The render path is split into two states (lookup, write) so we
+--   never combine the tbuf array index AND the font_glyph case in the
+--   same clock period.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -34,7 +33,6 @@ entity pmod_oled_top is
         clk           : in  std_logic;
         rst           : in  std_logic;
 
-        -- Live system status (from clk_sys top level).
         state_code    : in  std_logic_vector(2 downto 0);
         ambient_mode  : in  unsigned(1 downto 0);
         count         : in  unsigned(3 downto 0);
@@ -83,7 +81,8 @@ architecture rtl of pmod_oled_top is
         S_RUN_BCD,
         S_RUN_FILL_TEXT,
         S_RUN_CLEAR_FB,
-        S_RUN_RENDER,
+        S_RENDER_LOOKUP,
+        S_RENDER_WRITE,
         S_RUN_TX_PREFIX_LOAD,
         S_RUN_TX_PREFIX_WAIT,
         S_RUN_TX_DATA_LOAD,
@@ -122,11 +121,11 @@ architecture rtl of pmod_oled_top is
         'S','E','V',':',' ',' ',' ',' ',' ',' ',' ',' ',' ','L','I','M',':',' ',' ',' ',' '
     );
 
-    -- Initialise tbuf at config time so we don't pay an 84-byte synchronous
-    -- reset distribution out of `rst` on every reset release.  The bitstream
-    -- carries the template values in the FF init attributes; the FSM never
-    -- needs to re-load them on reset because the per-refresh fill writes
-    -- always overwrite the volatile fields before we draw a new frame.
+    -- Build tbuf at startup from TEMPLATE so the FPGA boots up with
+    -- the labels already in place and we never have to clear 84 bytes
+    -- on reset. The S_RUN_FILL_TEXT step overwrites the variable
+    -- fields before each refresh, so we don't need to touch tbuf in
+    -- the reset branch.
     function tbuf_init return tbuf_t is
         variable r : tbuf_t;
     begin
@@ -145,8 +144,9 @@ architecture rtl of pmod_oled_top is
     signal fb_raddr : unsigned(8 downto 0) := (others => '0');
     signal fb_rdata : std_logic_vector(7 downto 0);
 
-    -- Snapshotted inputs (registered at the start of every refresh
-    -- pulse so the per-line text computations work from a stable copy).
+    -- Latched copies of the live inputs. We capture them once when a
+    -- refresh tick fires so the BCD converter and the text fill all
+    -- see the same values for the whole frame.
     signal state_code_q : std_logic_vector(2 downto 0) := (others => '0');
     signal mode_q       : unsigned(1 downto 0) := (others => '0');
     signal count_q      : unsigned(3 downto 0) := (others => '0');
@@ -180,10 +180,17 @@ architecture rtl of pmod_oled_top is
     signal rnd_char  : integer range 0 to CHARS_PER_LINE := 0;
     signal rnd_col   : integer range 0 to 4 := 0;
 
+    -- Registers between the two render states.
+    -- tbuf_char_q : ASCII byte we just read out of tbuf
+    -- addr_q      : framebuffer write address
+    -- rnd_col_q   : which glyph column (0..4) we'll write next.
+    signal tbuf_char_q : std_logic_vector(7 downto 0) := (others => '0');
+    signal addr_q      : unsigned(8 downto 0) := (others => '0');
+    signal rnd_col_q   : integer range 0 to 4 := 0;
+
     signal data_cnt  : unsigned(9 downto 0) := (others => '0');
     signal data_phase : unsigned(1 downto 0) := (others => '0');
 
-    -- Helpers ---------------------------------------------------------
     function state_name (sc : std_logic_vector(2 downto 0); idx : integer)
         return std_logic_vector
     is
@@ -239,9 +246,9 @@ architecture rtl of pmod_oled_top is
 
 begin
 
-    refresh_gen : entity work.pulse_gen
-        generic map ( PERIOD_CYCLES => T_REFRESH )
-        port map ( clk => clk, rst => rst, en => '1', pulse => refresh_pulse );
+    refresh_gen : entity work.clock_div
+        generic map ( DIV => T_REFRESH )
+        port map ( clk => clk, rst => rst, en => '1', clk_en => refresh_pulse );
 
     spi_inst : entity work.oled_spi_master
         generic map ( SCLK_HALF_CYCLES => 12 )
@@ -414,14 +421,9 @@ begin
                             state   <= S_TX_INIT_POST_LOAD;
                         end if;
 
-                    -- ----------------------------------------------------
-                    -- Per-refresh: snapshot live data and clip to the
-                    -- BCD range.  The actual decimal conversion is done
-                    -- iteratively in S_RUN_BCD over the next handful of
-                    -- cycles.  Everything here is single-cycle paths of
-                    -- at most a 16-bit subtract or compare; no /100 or
-                    -- /10 chains.
-                    -- ----------------------------------------------------
+                    -- Snapshot the live data and clip to the BCD
+                    -- range. The actual decimal conversion runs
+                    -- iteratively over the next handful of cycles.
                     when S_RUN_WAIT_TICK =>
                         if refresh_pulse = '1' then
                             state_code_q <= state_code;
@@ -433,12 +435,6 @@ begin
                             if last_valid = '1' then
                                 range_q <= last_range_in;
                                 if t_seconds >= last_t_log then
-                                    -- Clip "age" to 0..999 directly here so
-                                    -- the BCD walker only ever sees a 10-bit
-                                    -- value.  Using a single 16-bit compare
-                                    -- + 16-bit subtract, both inside the
-                                    -- registered output, breaks the long
-                                    -- (16-bit sub -> /100 -> /10) chain.
                                     if (t_seconds - last_t_log) >
                                        to_unsigned(999, 16)
                                     then
@@ -454,17 +450,12 @@ begin
                                 age_q   <= (others => '0');
                             end if;
 
-                            -- Clip near_th into 0..99 here (the LIM line on
-                            -- the OLED only has space for two digits) so the
-                            -- BCD walker can run over a 7-bit input.
                             if near_th > to_unsigned(99, 8) then
                                 near_th_q <= to_unsigned(99, 8);
                             else
                                 near_th_q <= near_th;
                             end if;
 
-                            -- Reset the BCD digit accumulators; the walker
-                            -- below loads them per-value.
                             range_h   <= (others => '0');
                             range_t   <= (others => '0');
                             range_o   <= (others => '0');
@@ -477,21 +468,9 @@ begin
                             state     <= S_RUN_BCD;
                         end if;
 
-                    -- ----------------------------------------------------
                     -- Iterative subtract-based decimal conversion.
-                    -- Phases:
-                    --   0  load `range_q` into bcd_in, clear digit accs
-                    --   1  iterate (sub 100, sub 10) for range_q
-                    --   2  load `age_q`
-                    --   3  iterate for age_q
-                    --   4  load `near_th_q`
-                    --   5  iterate for near_th_q
-                    -- The "iterate" cycles do at most one 10-bit subtract
-                    -- and one 10-bit compare per clock; max ~19 cycles per
-                    -- value (worst case 999 = 9*100 + 9*10 + 9), giving
-                    -- ~60 cycles total per refresh, vastly inside the
-                    -- ~4M-cycle budget between 30 Hz refreshes.
-                    -- ----------------------------------------------------
+                    -- Phases: 0 load range, 1 reduce; 2 load age,
+                    -- 3 reduce; 4 load near_th, 5 reduce.
                     when S_RUN_BCD =>
                         case to_integer(bcd_phase) is
                             when 0 =>
@@ -551,9 +530,7 @@ begin
                                             - to_unsigned(10, bcd_in'length);
                                     bcd_t  <= bcd_t + 1;
                                 else
-                                    -- nth has only two digits; tens=bcd_t,
-                                    -- ones=remaining bcd_in.  Hundreds is
-                                    -- discarded (clipped to 99 upstream).
+                                    -- LIM only needs two digits.
                                     nth_t    <= bcd_t;
                                     nth_o    <= bcd_in(3 downto 0);
                                     fill_cnt <= 0;
@@ -576,7 +553,7 @@ begin
                             when 6  => tbuf(13) <= state_name(state_code_q, 6);
                             when 7  => tbuf(14) <= state_name(state_code_q, 7);
 
-                            -- Line 1: ambient at positions 6..11, count at 16.
+                            -- Line 1: ambient at 6..11, count at 16.
                             when 8  => tbuf(21+6)  <= mode_name(mode_q, 0);
                             when 9  => tbuf(21+7)  <= mode_name(mode_q, 1);
                             when 10 => tbuf(21+8)  <= mode_name(mode_q, 2);
@@ -585,7 +562,7 @@ begin
                             when 13 => tbuf(21+11) <= mode_name(mode_q, 5);
                             when 14 => tbuf(21+16) <= ascii_digit(count_q);
 
-                            -- Line 2: range at positions 6..8, age at 14..16.
+                            -- Line 2: range at 6..8, age at 14..16.
                             when 15 => tbuf(42+6)  <= ascii_digit(range_h);
                             when 16 => tbuf(42+7)  <= ascii_digit(range_t);
                             when 17 => tbuf(42+8)  <= ascii_digit(range_o);
@@ -593,7 +570,7 @@ begin
                             when 19 => tbuf(42+15) <= ascii_digit(age_t);
                             when 20 => tbuf(42+16) <= ascii_digit(age_o);
 
-                            -- Line 3: severity at positions 5..8, LIM digits at 17..18.
+                            -- Line 3: severity at 5..8, LIM digits at 17..18.
                             when 21 => tbuf(63+5) <= sev_name(sev_q, 0);
                             when 22 => tbuf(63+6) <= sev_name(sev_q, 1);
                             when 23 => tbuf(63+7) <= sev_name(sev_q, 2);
@@ -619,26 +596,30 @@ begin
                             rnd_page <= 0;
                             rnd_char <= 0;
                             rnd_col  <= 0;
-                            state    <= S_RUN_RENDER;
+                            state    <= S_RENDER_LOOKUP;
                         else
                             clr_cnt <= clr_cnt + 1;
                         end if;
 
-                    when S_RUN_RENDER =>
-                        fb_we    <= '1';
-                        fb_waddr <= to_unsigned(rnd_page * 128 + rnd_char * 6 + rnd_col, 9);
-                        fb_wdata <= font_glyph(
-                                      tbuf(rnd_page * CHARS_PER_LINE + rnd_char))
-                                      (rnd_col);
+                    -- Render runs in two clocks. First we read the
+                    -- character byte out of tbuf and figure out the
+                    -- framebuffer address. Then we use that latched
+                    -- character to pick the right glyph column and
+                    -- write the framebuffer. Doing both in one cycle
+                    -- combined the tbuf array index AND the 256-way
+                    -- font_glyph case in one path which was just too
+                    -- much logic to fit in 8 ns.
+                    when S_RENDER_LOOKUP =>
+                        tbuf_char_q <= tbuf(rnd_page * CHARS_PER_LINE + rnd_char);
+                        addr_q      <= to_unsigned(rnd_page * 128 + rnd_char * 6 + rnd_col, 9);
+                        rnd_col_q   <= rnd_col;
+
                         if rnd_col = 4 then
                             rnd_col <= 0;
                             if rnd_char = CHARS_PER_LINE - 1 then
                                 rnd_char <= 0;
                                 if rnd_page = 3 then
-                                    rnd_page    <= 0;
-                                    rom_idx     <= INIT_LEN;
-                                    rom_idx_end <= ROM_LEN;
-                                    state       <= S_RUN_TX_PREFIX_LOAD;
+                                    rnd_page <= 0;
                                 else
                                     rnd_page <= rnd_page + 1;
                                 end if;
@@ -647,6 +628,22 @@ begin
                             end if;
                         else
                             rnd_col <= rnd_col + 1;
+                        end if;
+
+                        state <= S_RENDER_WRITE;
+
+                    when S_RENDER_WRITE =>
+                        fb_we    <= '1';
+                        fb_waddr <= addr_q;
+                        fb_wdata <= font_glyph(tbuf_char_q)(rnd_col_q);
+
+                        -- Done iff the counters wrapped back to (0,0,0).
+                        if rnd_col = 0 and rnd_char = 0 and rnd_page = 0 then
+                            rom_idx     <= INIT_LEN;
+                            rom_idx_end <= ROM_LEN;
+                            state       <= S_RUN_TX_PREFIX_LOAD;
+                        else
+                            state       <= S_RENDER_LOOKUP;
                         end if;
 
                     when S_RUN_TX_PREFIX_LOAD =>
