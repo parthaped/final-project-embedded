@@ -154,4 +154,6 @@ report_drc             -file $outdir/post_route_drc.rpt
 write_bitstream -force $outdir/threat_system.bit
 puts "INFO: wrote $outdir/threat_system.bit"
 
-exit 0
+# NOTE: no `exit` here on purpose. In -mode batch Vivado will still exit
+# automatically after the script ends; in -mode tcl or -mode gui the
+# process stays open so we can poke around at the routed design.
